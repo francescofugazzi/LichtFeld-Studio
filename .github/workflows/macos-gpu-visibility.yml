@@ -1,0 +1,36 @@
+name: macOS GPU visibility probe
+
+on:
+  push:
+    branches:
+      - ci/macos-gpu-visibility-probe
+
+permissions: {}
+
+jobs:
+  probe:
+    runs-on: macos-15
+    timeout-minutes: 10
+    steps:
+      - name: Identify runner and display hardware
+        shell: bash
+        run: |
+          echo "Runner architecture: $RUNNER_ARCH"
+          echo "Kernel architecture: $(uname -m)"
+          sw_vers
+          system_profiler SPDisplaysDataType
+
+      - name: Check whether Metal exposes a GPU
+        shell: bash
+        run: |
+          device="$(osascript -l JavaScript -e 'ObjC.import("Metal"); var d = $.MTLCreateSystemDefaultDevice(); d ? ObjC.unwrap(d.name) : "NO_METAL_DEVICE";')"
+          echo "Metal device: $device"
+          {
+            echo "### macOS GPU visibility"
+            echo "Runner architecture: $RUNNER_ARCH"
+            echo "Metal device: $device"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [[ "$device" == "NO_METAL_DEVICE" ]]; then
+            echo "::error::No Metal GPU is visible to this runner"
+            exit 1
+          fi
