@@ -682,7 +682,7 @@ def test_tracking_range_keeps_partial_edits_and_blocks_invalid_submission(panel_
             self.attributes[name] = enabled
 
     controls = {name: Control() for name in (
-        "sam-controls", "sam-pages", "sam-page-frame", "sam-page-sequence", "sam-frame-controls",
+        "sam-controls", "sam-pages", "sam-page-frame", "sam-page-sequence", "sam-frame-controls", "sam-sequence-action-row",
         "sam-tracking", "sam-track-first", "sam-track-last", "sam-track-direction",
         "sam-approve", "sam-track", "sam-save", "sam-save-exclude", "sam-apply-heading", "sam-hint", "sam-generate-row", "sam-semantic-find-row")}
     panel._doc = doc = _DocumentStub(controls)
@@ -709,12 +709,14 @@ def test_tracking_range_keeps_partial_edits_and_blocks_invalid_submission(panel_
     assert controls["sam-controls"].scroll_top == 0
     assert controls["sam-frame-controls"].attributes["hidden"]
     assert controls["sam-generate-row"].attributes["hidden"]
+    assert not controls["sam-sequence-action-row"].attributes["hidden"]
     assert not controls["sam-tracking"].attributes["hidden"]
     assert controls["sam-page-sequence"].attributes["aria-pressed"] == "true"
     panel._set_sam_page("frame")
     panel._update_sam_page(doc)
     assert not controls["sam-frame-controls"].attributes["hidden"]
     assert not controls["sam-generate-row"].attributes["hidden"]
+    assert controls["sam-sequence-action-row"].attributes["hidden"]
     assert controls["sam-tracking"].attributes["hidden"]
     assert controls["sam-semantic-find-row"].attributes["hidden"]
     panel._sam_method = "semantic"

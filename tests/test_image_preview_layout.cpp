@@ -393,7 +393,7 @@ namespace {
         auto* sidebar = doc->GetElementById("sidebar");
         sidebar->SetClass("sam-sidebar", true);
         doc->GetElementById("metadata-info")->SetClass("hidden", true);
-        for (const auto* id : {"sam-pages", "sam-controls", "sam-apply-controls", "sam-tracking", "sam-save-controls"})
+        for (const auto* id : {"sam-pages", "sam-controls", "sam-apply-controls", "sam-tracking", "sam-save-controls", "sam-sequence-action-row"})
             doc->GetElementById(id)->SetClass("hidden", false);
         for (const auto* id : {"sam-frame-controls", "sam-generate-row", "sam-apply", "sam-exclude"})
             doc->GetElementById(id)->SetClass("hidden", true);
@@ -432,7 +432,7 @@ namespace {
                     if (width != 900)
                         button->ScrollIntoView(false);
                     context->Update();
-                    checkWithin(button, id == Rml::String("sam-track") || id == Rml::String("sam-approve-range") ? controls : apply);
+                    checkWithin(button, id == Rml::String("sam-approve-range") ? controls : apply);
                     const auto key = id == Rml::String("sam-track") ? "sam_track" : id == Rml::String("sam-approve-range") ? "sam_approve_range"
                                                                                 : id == Rml::String("sam-save")            ? "sam_save_approved"
                                                                                                                            : "sam_save_excluded";
@@ -456,7 +456,7 @@ namespace {
                     auto* field = doc->GetElementById(id);
                     field->ScrollIntoView(false);
                     context->Update();
-                    checkWithin(field, controls);
+                    checkWithin(field, id == Rml::String("sam-track") ? apply : controls);
                     EXPECT_EQ(doc->GetElementById("image-viewport")->GetBox().GetSize(), viewport);
                     EXPECT_NEAR(apply->GetAbsoluteOffset().y, apply_top, .5f);
                 }

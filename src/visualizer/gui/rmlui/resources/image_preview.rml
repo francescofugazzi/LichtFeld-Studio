@@ -160,9 +160,6 @@
           </div>
           <label for="sam-track-direction" id="sam-track-direction-label"></label>
           <select id="sam-track-direction"></select>
-          <div class="sam-tool-row">
-            <button type="button" class="btn" id="sam-track"></button>
-          </div>
           <div class="sidebar-check-row">
             <input type="checkbox" id="sam-approve"/>
             <label for="sam-approve" id="sam-approve-label"></label>
@@ -237,6 +234,9 @@
       </div>
       </div>
       <div id="sam-apply-controls" class="hidden">
+        <div class="sam-tool-row hidden" id="sam-sequence-action-row">
+          <button type="button" class="btn btn--primary" id="sam-track"></button>
+        </div>
         <div class="sam-tool-row hidden" id="sam-semantic-find-row">
           <button type="button" class="btn btn--primary" id="sam-semantic-find"></button>
         </div>

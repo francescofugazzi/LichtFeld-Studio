@@ -2598,6 +2598,9 @@ class ImagePreviewPanel(Panel):
             element = doc.get_element_by_id(content)
             if element:
                 element.set_class("hidden", not active)
+        sequence_action = doc.get_element_by_id("sam-sequence-action-row")
+        if sequence_action:
+            sequence_action.set_class("hidden", not (sequence and self._sam_page == "sequence"))
         for row, method in (("sam-generate-row", "manual"), ("sam-semantic-find-row", "semantic")):
             action = doc.get_element_by_id(row)
             if action:

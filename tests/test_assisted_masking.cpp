@@ -10,6 +10,7 @@
 #include "core/utc_time.hpp"
 #include "gui/assisted_masking.hpp"
 #include "gui/windows/video_extractor_dialog.hpp"
+#include "io/video_frame_extractor.hpp"
 #include "licht_test_support.hpp"
 #include "long_path_test_support.hpp"
 #include "preprocessing/preprocess.hpp"
@@ -253,6 +254,105 @@ namespace {
             EXPECT_EQ(protected_frames[index].revision, searched[index].revision);
             EXPECT_TRUE(protected_frames[index].approved);
         }
+        service.shutdown();
+        EXPECT_FALSE(jobs.anyRunning(JobType::AssistedMask));
+    }
+
+    TEST(AssistedMaskingGpu, RealVideoSemanticRangePreservesCompletedProposalsAcrossCancellation) {
+        // Supply a real clip with changing people, rather than a video made from a still.
+        // This optional hardware case shares the production extractor and worker.
+        const auto video = lfs::core::environment::value("LFS_SEMANTIC_VIDEO_FIXTURE");
+        const auto detector = lfs::core::environment::value("LFS_LLMDET_WEIGHTS");
+        int devices = 0;
+        if (!video || !detector || cudaGetDeviceCount(&devices) != cudaSuccess || !devices ||
+            !lfs::preprocessing::ensure_sam2_weights(false))
+            GTEST_SKIP() << "Real video fixture, cached weights and CUDA are required";
+        lfs::test::long_paths::LongPathDirectory directory;
+        lfs::io::VideoFrameExtractor extractor;
+        lfs::io::VideoFrameExtractor::Params params;
+        params.video_path = lfs::core::utf8_to_path(*video);
+        params.output_dir = directory.path;
+        params.fps = 1;
+        params.end_time = 18;
+        params.resolution_mode = lfs::io::ResolutionMode::Scale;
+        params.scale = .5f;
+        std::vector<lfs::core::ExtractedFrame> sources;
+        params.frame_written = [&](const auto& frame) { sources.push_back(frame); };
+        std::string error;
+        ASSERT_TRUE(extractor.extract(params, error)) << error;
+        ASSERT_GE(sources.size(), 8u);
+        const auto run = lfs::core::generate_uuid_v4();
+        JobRegistry jobs;
+        AssistedMasking service(jobs, [] { return true; });
+        service.beginSequence(run, sources, directory.path, {});
+        AssistedMaskRequest input{};
+        input.run = run;
+        input.image = sources.front().path; // Deliberately outside the search interval.
+        input.revision = "real-video";
+        input.mtime_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                             lfs::core::file_time_to_system_clock(lfs::core::native_fs::last_write_time(input.image)).time_since_epoch())
+                             .count();
+        input.size_bytes = lfs::core::native_fs::file_size(input.image);
+        input.semantic = AssistedMaskSemantic{
+            .prepare_weights = [path = lfs::core::utf8_to_path(*detector)](const auto&) { return lfs::core::nn::WeightFile::open(path); },
+            .descriptions = {{101, 2711, 1012, 102}},
+            .frames = std::array{1, int(sources.size()) - 2}};
+        const auto request = service.submit(input);
+        AssistedMaskSnapshot state;
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(90);
+        do {
+            state = service.poll();
+            if (state.completed || state.phase == "error")
+                break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        } while (std::chrono::steady_clock::now() < deadline);
+        ASSERT_EQ(state.request, request);
+        ASSERT_NE(state.phase, "error") << state.error;
+        ASSERT_GT(state.completed, 0u);
+        ASSERT_LT(state.completed, sources.size() - 2);
+        service.close();
+        ASSERT_EQ(wait_for_mask(service, 0, "idle").phase, "idle");
+        auto partial = service.sequenceFrames(run);
+        ASSERT_EQ(partial.front().revision, 0u);
+        ASSERT_EQ(partial.back().revision, 0u);
+        ASSERT_NE(partial[1].revision, 0u);
+        for (const auto& frame : partial) {
+            EXPECT_FALSE(frame.approved);
+            EXPECT_TRUE(frame.mask_path.empty());
+        }
+        // The user can protect a completed proposal before resuming the interval.
+        ASSERT_TRUE(service.approveFrames(run, std::array{AssistedMaskApproval{1, partial[1].revision, true}}));
+        state = wait_for_mask(service, service.submit(input), "searched");
+        ASSERT_EQ(state.phase, "searched") << state.error;
+        EXPECT_EQ(state.total, sources.size() - 3);
+        EXPECT_EQ(state.completed, state.total);
+        const auto frames = service.sequenceFrames(run);
+        EXPECT_EQ(frames.front().revision, 0u);
+        EXPECT_EQ(frames.back().revision, 0u);
+        EXPECT_EQ(frames[1].revision, partial[1].revision);
+        EXPECT_TRUE(frames[1].approved);
+        std::vector<int> counts;
+        for (size_t i = 1; i + 1 < frames.size(); ++i) {
+            ASSERT_NE(frames[i].revision, 0u);
+            EXPECT_TRUE(frames[i].mask_path.empty());
+            EXPECT_EQ(frames[i].approved, i == 1);
+            counts.push_back(frames[i].matched_objects);
+        }
+        const auto [least, most] = std::minmax_element(counts.begin(), counts.end());
+        EXPECT_GE(*least, 0);
+        EXPECT_LT(*least, *most) << "The real-video fixture must contain changing people";
+        input.semantic.reset();
+        input.publish_approved = true;
+        input.exclude = true; // Also valid when the protected frame has no match.
+        state = wait_for_mask(service, service.submit(input), "saved");
+        ASSERT_EQ(state.phase, "saved") << state.error;
+        EXPECT_EQ(state.completed, 1u);
+        const auto saved = service.sequenceFrames(run);
+        for (size_t i = 0; i < saved.size(); ++i)
+            EXPECT_EQ(saved[i].mask_path.empty(), i != 1);
+        const auto [width, height, channels] = lfs::core::probe_image_info(saved[1].mask_path);
+        EXPECT_EQ(width, sources[1].width);
+        EXPECT_EQ(height, sources[1].height);
         service.shutdown();
         EXPECT_FALSE(jobs.anyRunning(JobType::AssistedMask));
     }
