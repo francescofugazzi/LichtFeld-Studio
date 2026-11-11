@@ -447,6 +447,23 @@ namespace {
                     EXPECT_NEAR(apply->GetAbsoluteOffset().y, apply_top, .5f);
                     checkWithin(apply, sidebar);
                 }
+                // The interval search shares the text controls with the frame page.
+                doc->GetElementById("sam-semantic-controls")->SetClass("hidden", false);
+                doc->GetElementById("sam-track-direction")->SetClass("hidden", true);
+                doc->GetElementById("sam-track-direction-label")->SetClass("hidden", true);
+                doc->GetElementById("sam-track")->SetInnerRML(locales.get("image_preview.sam_semantic_search_range"));
+                for (const auto* id : {"sam-semantic-text", "sam-track-first", "sam-track-last", "sam-track"}) {
+                    auto* field = doc->GetElementById(id);
+                    field->ScrollIntoView(false);
+                    context->Update();
+                    checkWithin(field, controls);
+                    EXPECT_EQ(doc->GetElementById("image-viewport")->GetBox().GetSize(), viewport);
+                    EXPECT_NEAR(apply->GetAbsoluteOffset().y, apply_top, .5f);
+                }
+                doc->GetElementById("sam-semantic-controls")->SetClass("hidden", true);
+                doc->GetElementById("sam-track-direction")->SetClass("hidden", false);
+                doc->GetElementById("sam-track-direction-label")->SetClass("hidden", false);
+                doc->GetElementById("sam-track")->SetInnerRML(locales.get("image_preview.sam_track"));
             }
         }
     }

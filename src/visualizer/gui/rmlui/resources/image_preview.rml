@@ -95,7 +95,6 @@
         <button type="button" class="btn" id="sam-page-sequence"></button>
       </div>
       <div id="sam-controls" class="hidden">
-        <div id="sam-frame-controls">
         <div id="sam-methods" class="sam-tool-row">
           <button type="button" class="btn" id="sam-method-manual"></button>
           <button type="button" class="btn" id="sam-semantic-heading"></button>
@@ -122,6 +121,7 @@
           </div>
         </div>
         </div>
+        <div id="sam-frame-controls">
         <div id="sam-manual-controls">
         <span class="section-label-ip" id="sam-heading"></span>
         <div class="sam-tool-row">
