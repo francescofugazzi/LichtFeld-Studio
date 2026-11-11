@@ -1264,7 +1264,7 @@ class ImagePreviewPanel(Panel):
                           f"&thumb={THUMB_MAX_PX}&w={width}&h={height}&mode=mask")
                 mask_sources.add(source)
                 mask_decorator = f"image({source} contain)"
-            badge = " ✓" if frame.get("approved") else " !" if frame.get("revision") and not frame.get("reliable") else " ●" if frame.get("revision") else ""
+            badge = " ✓" if frame.get("approved") else " !" if frame.get("revision") and not frame.get("reliable") and frame.get("matched_objects") != 0 else " ●" if frame.get("revision") else ""
             records.append({"index": i, "label": f"{i + 1:,}" + badge, "name": name,
                             "selected": i == self._current_index,
                             "mask_decorator": mask_decorator,
@@ -2191,7 +2191,7 @@ class ImagePreviewPanel(Panel):
 
     def _sam_approve_range(self):
         editor = self._mask_editor
-        if not self._sam_sequence or self._sam_semantic_busy() or editor.phase not in ("ready", "searched"):
+        if not self._sam_sequence or self._sam_semantic_busy():
             return
         if self._doc and not self._sam_track_options_changed(None):
             return
@@ -2210,13 +2210,18 @@ class ImagePreviewPanel(Panel):
             self._mark_dirty()
             return
         previous = [(first + i, frame["revision"], False) for i, frame in enumerate(frames)
-                    if frame.get("revision") and not frame["approved"]]
+                    if frame.get("revision") and not frame["approved"] and frame.get("matched_objects") != 0]
         if not previous:
+            if any(frame.get("matched_objects") == 0 for frame in frames):
+                self._sam_sequence_error = lf.ui.tr("image_preview.sam_semantic_no_matches")
+                self._mark_dirty()
             return
         label = lf.ui.tr("image_preview.sam_approve_range").removesuffix("…")
         message = lf.ui.tr("image_preview.sam_approve_range_hint").format(
             first=first + 1, last=last + 1, count=len(previous),
-            uncertain=sum(bool(frame.get("revision")) and not frame["reliable"] and not frame["approved"] for frame in frames),
+            uncertain=sum(bool(frame.get("revision")) and frame.get("matched_objects") != 0
+                          and not frame["reliable"] and not frame["approved"] for frame in frames),
+            empty=sum(bool(frame.get("revision")) and frame.get("matched_objects") == 0 and not frame["approved"] for frame in frames),
             missing=sum(not frame.get("revision") for frame in frames))
         panel_ref = weakref.ref(self)
         editor_ref = weakref.ref(editor)
@@ -2377,8 +2382,8 @@ class ImagePreviewPanel(Panel):
         frame = self._sam_frame_summaries.get(index, {})
         key = ("approved" if frame.get("approved") else "keyframe" if frame.get("keyframe") else
                "proposal" if frame.get("revision") else "pending")
-        status = lf.ui.tr(_sam_key("frame_" + key))
-        if frame.get("revision") and not frame.get("reliable") and not frame.get("approved"):
+        status = lf.ui.tr(_sam_key("semantic_no_matches" if frame.get("matched_objects") == 0 else "frame_" + key))
+        if frame.get("revision") and frame.get("matched_objects") != 0 and not frame.get("reliable") and not frame.get("approved"):
             status += " · " + lf.ui.tr("image_preview.sam_frame_low_confidence")
         return status
 
@@ -2490,6 +2495,8 @@ class ImagePreviewPanel(Panel):
         actions = ((lf.keymap.Action.IMAGE_PREVIEW_GENERATE,) if self._sam_method == "semantic" else
                    (lf.keymap.Action.IMAGE_PREVIEW_DELETE, lf.keymap.Action.IMAGE_PREVIEW_REMOVE_POINT,
                     lf.keymap.Action.IMAGE_PREVIEW_GENERATE))
+        if self._sam_sequence and self._sam_page == "sequence":
+            actions = ()
         for action in actions:
             binding = lf.keymap.get_trigger_description(action, lf.keymap.ToolMode.IMAGE_PREVIEW)
             if binding:
@@ -2510,10 +2517,14 @@ class ImagePreviewPanel(Panel):
                 hint_key = "semantic_no_matches" if empty_keep and has_target else "apply_dataset" if not has_target else label
                 button.set_attribute("title", lf.ui.tr(_sam_key(hint_key)))
         phase = editor.phase if not editor.error else "error"
+        if self._sam_sequence_request and phase == "idle":
+            phase = "predicting" if self._sam_sequence_action == "search" else "tracking"
         has_controls = bool(editor.draft and (editor.draft.points or editor.draft.box))
         status = ("" if phase == "idle" and not has_controls else
                   lf.ui.tr(_sam_key("generate_hint" if phase == "idle" else phase)))
-        if phase in ("tracking", "saving", "saved", "searched") or (self._sam_sequence_request and self._sam_progress[1]) or (phase == "error" and self._sam_progress[1]):
+        if phase == "searched" and not self._sam_progress[1]:
+            status = lf.ui.tr("image_preview.sam_range_protected")
+        if phase in ("tracking", "saving", "saved") or (phase == "searched" and self._sam_progress[1]) or (self._sam_sequence_request and self._sam_progress[1]) or (phase == "error" and self._sam_progress[1]):
             status += f" · {self._sam_progress[0]} / {self._sam_progress[1]}"
         if phase == "ready" and editor.matched_objects >= 0:
             status = (lf.ui.tr(_sam_key("semantic_no_matches")) if editor.matched_objects == 0 else
@@ -2621,7 +2632,7 @@ class ImagePreviewPanel(Panel):
             return
         _set_text(doc, "sam-apply-heading", lf.ui.tr("image_preview.sam_save_heading")
                   + f" · {self._sam_progress[2]} / {len(self._image_paths)}")
-        for eid, key in (("sam-tracking-heading", "tracking_heading"), ("sam-track-first-label", "range_first"),
+        for eid, key in (("sam-tracking-heading", "semantic_range_heading" if self._sam_method == "semantic" else "tracking_heading"), ("sam-track-first-label", "range_first"),
                          ("sam-track-last-label", "range_last"), ("sam-track-direction-label", "direction"),
                          ("sam-approve-label", "approve")):
             _set_text(doc, eid, lf.ui.tr(_sam_key(key)))
@@ -2669,7 +2680,6 @@ class ImagePreviewPanel(Panel):
         hint = "semantic_range_hint" if search else "semantic_no_matches" if empty else "tracking_hint"
         track.set_attribute("title", lf.ui.tr(_sam_key(hint)))
         self._set_disabled(track, not self._sam_sequence_request and (busy or not ready))
-        _set_text(doc, "sam-tracking-heading", lf.ui.tr(_sam_key("semantic_range_heading" if search else "tracking_heading")))
         for eid in ("sam-track-direction", "sam-track-direction-label"):
             element = doc.get_element_by_id(eid)
             if element:
@@ -2677,7 +2687,7 @@ class ImagePreviewPanel(Panel):
         approve_range = doc.get_element_by_id("sam-approve-range")
         if approve_range:
             approve_range.set_text(lf.ui.tr("image_preview.sam_approve_range"))
-            self._set_disabled(approve_range, busy or self._mask_editor.phase not in ("ready", "searched"))
+            self._set_disabled(approve_range, self._sam_semantic_busy())
         sources = self._sam_sequence.get("frames", ())
         source = sources[self._current_index] if self._current_index < len(sources) else {}
         time_text = f"≈{source['time']:.3f}" if "time" in source else "—"
@@ -2857,7 +2867,7 @@ class ImagePreviewPanel(Panel):
                       if code is not None else keymap.Action.NONE)
             if action == keymap.Action.IMAGE_PREVIEW_DELETE:
                 self._sam_edit("remove_selected")
-            elif action == keymap.Action.IMAGE_PREVIEW_GENERATE:
+            elif action == keymap.Action.IMAGE_PREVIEW_GENERATE and not (self._sam_sequence and self._sam_page == "sequence"):
                 self._sam_generate(semantic=self._sam_method == "semantic")
             else:
                 action = keymap.Action.NONE

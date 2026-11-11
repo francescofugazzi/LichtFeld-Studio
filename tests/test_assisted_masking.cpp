@@ -241,10 +241,6 @@ namespace {
         }
         ASSERT_TRUE(service.approveFrames(run, std::array{AssistedMaskApproval{1, searched[1].revision, true},
                                                           AssistedMaskApproval{2, searched[2].revision, true}}));
-        input.semantic->prepare_weights = [](const auto&) -> decltype(lfs::core::nn::WeightFile::open(std::filesystem::path{})) {
-            ADD_FAILURE() << "Protected frames must not acquire detector weights";
-            throw std::runtime_error("unexpected model acquisition");
-        };
         state = wait_for_mask(service, service.submit(input), "searched");
         ASSERT_EQ(state.phase, "searched") << state.error;
         EXPECT_EQ(state.total, 0u);

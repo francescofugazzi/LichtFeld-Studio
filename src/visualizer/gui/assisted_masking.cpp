@@ -514,17 +514,8 @@ namespace lfs::vis::gui {
                                 throw std::runtime_error(decoded.error);
                             core::waitForCUDAStream(stream, decoded.stream);
                             decoded.tensor.set_stream(stream);
-                            if (encode_image) {
-                                // Cancellation during detection must not leave the
-                                // previous source associated with new encoder features.
-                                image.clear();
-                                stage("encoding", 0.3f);
-                                model_failure = true;
-                                const auto encoded = model->set_image(decoded.tensor.unsqueeze(0));
-                                if (!encoded)
-                                    throw std::runtime_error(std::string(encoded.error().user_message()));
-                                model_failure = false;
-                            }
+                            if (encode_image)
+                                image.clear(); // Detection/cancellation must not leave stale encoder identity.
                             if (w.input.semantic) {
                                 const auto& semantic = *w.input.semantic;
                                 if (decoded.tensor.ndim() != 3 || decoded.tensor.size(0) != 3 ||
@@ -559,10 +550,18 @@ namespace lfs::vis::gui {
                                                                   width, height, semantic.confidence, stream);
                                 model_failure = false;
                             }
+                            if (encode_image && (!w.input.semantic || !frame_boxes.boxes.empty())) {
+                                stage("encoding", w.input.semantic ? 0.6f : 0.3f);
+                                model_failure = true;
+                                const auto encoded = model->set_image(decoded.tensor.unsqueeze(0));
+                                if (!encoded)
+                                    throw std::runtime_error(std::string(encoded.error().user_message()));
+                                model_failure = false;
+                                image = source_path;
+                                stamp = source_time;
+                                bytes = source_bytes;
+                            }
                             LFS_CUDA_CHECK(cudaStreamSynchronize(stream)); // Decoder owns frame leases until this point.
-                            image = source_path;
-                            stamp = source_time;
-                            bytes = source_bytes;
                         }
                         return frame_boxes;
                     };
@@ -922,7 +921,7 @@ namespace lfs::vis::gui {
                                      .to(DataType::Float32);
                     if (obsolete())
                         continue;
-                    if (fs::last_write_time(image) != stamp || fs::file_size(image) != bytes)
+                    if (fs::last_write_time(w.input.image) != current_stamp || fs::file_size(w.input.image) != current_bytes)
                         throw std::runtime_error(LOC("image_preview.sam_source_changed"));
                     if (w.sequence) {
                         const auto found = std::ranges::find(w.sequence->sources, w.input.image, &core::ExtractedFrame::path);
