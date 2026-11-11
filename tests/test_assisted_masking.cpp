@@ -106,6 +106,18 @@ namespace {
         input.semantic->confidence = .25f;
         input.refine_request = 1;
         EXPECT_THROW(service.submit(input), std::invalid_argument);
+        input.refine_request = 0;
+        input.semantic->frames = std::array{0, 0};
+        EXPECT_THROW(service.submit(input), std::invalid_argument); // No extraction run.
+        const auto run = lfs::core::generate_uuid_v4();
+        service.beginSequence(run, {{input.image, 640, 268, 0, 0}}, {}, {});
+        input.run = run;
+        for (const auto range : {std::array{-1, 0}, std::array{0, 1}, std::array{1, 0}}) {
+            input.semantic->frames = range;
+            EXPECT_THROW(service.submit(input), std::invalid_argument);
+        }
+        input.semantic->frames = std::array{0, 0};
+        EXPECT_THROW(service.submit(input), std::runtime_error); // Valid range reaches admission.
         EXPECT_FALSE(jobs.anyRunning(JobType::AssistedMask));
     }
 
@@ -120,10 +132,13 @@ namespace {
         lfs::test::long_paths::LongPathDirectory directory;
         const auto image = directory.path / "people.png";
         lfs::core::native_fs::copy_file(std::filesystem::path(PROJECT_ROOT_PATH) / "tests/data/nn/semantic_people.png", image);
+        const auto next = directory.path / "next.png", last = directory.path / "last.png";
+        ASSERT_TRUE(lfs::core::native_fs::copy_file(image, next));
+        ASSERT_TRUE(lfs::core::native_fs::copy_file(image, last));
         const auto run = lfs::core::generate_uuid_v4();
         JobRegistry jobs;
         AssistedMasking service(jobs, [] { return true; });
-        service.beginSequence(run, {{image, 640, 268, 0, 0}}, directory.path, {});
+        service.beginSequence(run, {{image, 640, 268, 0, 0}, {next, 640, 268, 1, 1}, {last, 640, 268, 2, 2}}, directory.path, {});
         AssistedMaskRequest input{};
         input.run = run;
         input.image = image;
@@ -158,7 +173,7 @@ namespace {
         repeat = wait_for_mask(service, service.submit(input), "ready");
         ASSERT_EQ(repeat.phase, "ready") << repeat.error;
         const auto frames = service.sequenceFrames(run);
-        ASSERT_EQ(frames.size(), 1u);
+        ASSERT_EQ(frames.size(), 3u);
         EXPECT_FALSE(frames[0].approved);
         EXPECT_EQ(frames[0].matched_objects, 0);
         const auto target = lfs::preprocessing::video_mask_path(directory.path, image.filename());
@@ -201,6 +216,28 @@ namespace {
         ASSERT_TRUE(service.approveFrames(run, std::array{AssistedMaskApproval{0, frames[0].revision, true}}));
         service.invalidateFrame(run, 0);
         EXPECT_EQ(service.poll().empty_approved, 0u);
+        input.publish_approved = false;
+        input.semantic = AssistedMaskSemantic{.prepare_weights = [path = lfs::core::utf8_to_path(*detector)](const auto&) { return lfs::core::nn::WeightFile::open(path); },
+                                              .descriptions = {{101, 2711, 1012, 102}}};
+        state = wait_for_mask(service, service.submit(input), "ready");
+        ASSERT_EQ(state.phase, "ready") << state.error;
+        ASSERT_EQ(state.matched_objects, 2);
+        const auto protected_frame = service.sequenceFrames(run)[0];
+        ASSERT_TRUE(service.approveFrames(run, std::array{AssistedMaskApproval{0, protected_frame.revision, true}}));
+        input.semantic->frames = std::array{0, 2};
+        state = wait_for_mask(service, service.submit(input), "searched");
+        ASSERT_EQ(state.phase, "searched") << state.error;
+        EXPECT_EQ(state.total, 2u);
+        EXPECT_EQ(state.completed, 2u);
+        const auto searched = service.sequenceFrames(run);
+        EXPECT_EQ(searched[0].revision, protected_frame.revision);
+        EXPECT_TRUE(searched[0].approved);
+        for (const size_t index : {1u, 2u}) {
+            EXPECT_EQ(searched[index].matched_objects, 2);
+            EXPECT_FALSE(searched[index].approved);
+            EXPECT_FALSE(searched[index].keyframe);
+            EXPECT_TRUE(searched[index].mask_path.empty());
+        }
         service.shutdown();
         EXPECT_FALSE(jobs.anyRunning(JobType::AssistedMask));
     }

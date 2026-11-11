@@ -5137,6 +5137,12 @@ namespace lfs::python {
                 }
                 if (context.contains("confidence"))
                     selection.confidence = nb::cast<float>(context["confidence"]);
+                if (context.contains("frames")) {
+                    const auto frames = nb::cast<nb::list>(context["frames"]);
+                    if (frames.size() != 2)
+                        throw std::invalid_argument(LOC("image_preview.sam_sequence_invalid"));
+                    selection.frames = std::array{nb::cast<int>(frames[0]), nb::cast<int>(frames[1])};
+                }
                 input.semantic = std::move(selection);
             }
             return gui->asyncTasks().assistedMasking().submit(std::move(input)); }, nb::arg("path"), nb::arg("revision"), nb::arg("mtime_ns"), nb::arg("size_bytes"), nb::arg("points"), nb::arg("box") = nb::none(), nb::arg("refine_request") = 0, nb::arg("refine_candidate") = -1, nb::arg("weights") = "", nb::arg("export_candidate") = -1, nb::arg("exclude") = false, nb::arg("sequence") = nb::none(), nb::arg("semantic") = nb::none(), "UI thread: queue native SAM inference, bounded text/category detection, sequence tracking/inspection, or render a selected original-resolution mask. Semantic descriptions are BERT token ID lists; the shared cache downloads the verified native LLMDet Tiny archive. Apply is a separate explicit action.");
