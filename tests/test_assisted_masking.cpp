@@ -218,7 +218,7 @@ namespace {
         service.invalidateFrame(run, 0);
         EXPECT_EQ(service.poll().empty_approved, 0u);
         input.publish_approved = false;
-        input.semantic = AssistedMaskSemantic{.prepare_weights = [path = lfs::core::utf8_to_path(*detector)](const auto&) { return lfs::core::nn::WeightFile::open(path); },
+        input.semantic = AssistedMaskSemantic{.prepare_weights = [path = detector->path](const auto&) { return lfs::core::nn::WeightFile::open(path); },
                                               .descriptions = {{101, 2711, 1012, 102}}};
         state = wait_for_mask(service, service.submit(input), "ready");
         ASSERT_EQ(state.phase, "ready") << state.error;
@@ -258,9 +258,9 @@ namespace {
         // Supply a real clip with changing people, rather than a video made from a still.
         // This optional hardware case shares the production extractor and worker.
         const auto video = lfs::core::environment::value("LFS_SEMANTIC_VIDEO_FIXTURE");
-        const auto detector = lfs::core::environment::value("LFS_LLMDET_WEIGHTS");
+        const auto detector = lfs::preprocessing::inspect_cached_model(lfs::preprocessing::CachedModel::LlmDet);
         int devices = 0;
-        if (!video || !detector || cudaGetDeviceCount(&devices) != cudaSuccess || !devices ||
+        if (!video || !detector || !detector->present || cudaGetDeviceCount(&devices) != cudaSuccess || !devices ||
             !lfs::preprocessing::ensure_sam2_weights(false))
             GTEST_SKIP() << "Real video fixture, cached weights and CUDA are required";
         lfs::test::long_paths::LongPathDirectory directory;
@@ -290,7 +290,7 @@ namespace {
                              .count();
         input.size_bytes = lfs::core::native_fs::file_size(input.image);
         input.semantic = AssistedMaskSemantic{
-            .prepare_weights = [path = lfs::core::utf8_to_path(*detector)](const auto&) { return lfs::core::nn::WeightFile::open(path); },
+            .prepare_weights = [path = detector->path](const auto&) { return lfs::core::nn::WeightFile::open(path); },
             .descriptions = {{101, 2711, 1012, 102}},
             .frames = std::array{1, int(sources.size()) - 2}};
         const auto request = service.submit(input);
