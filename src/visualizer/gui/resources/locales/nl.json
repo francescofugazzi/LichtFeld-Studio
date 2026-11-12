@@ -2262,7 +2262,7 @@
     "sam_reverse": "Achteruit",
     "sam_approve": "Dit frame goedkeuren",
     "sam_approve_range": "Bereik goedkeuren…",
-    "sam_approve_range_hint": "Frames {first}–{last}\n\nTe goedkeuren maskers: {count}\nLage modelzekerheid: {uncertain}\nGeen objecten gevonden: {empty} (blijven ongekeurd)\nZonder voorstel: {missing} (blijven ongekeurd)\n\nControleer de maskers voordat u ze goedkeurt. Goedkeuring kan ongedaan worden gemaakt.",
+    "sam_approve_range_hint": "Frames {first}–{last}\n\nGoed te keuren maskers: {count}\nLage modelzekerheid: {uncertain}\nGeen objecten gevonden: {empty} (blijven niet goedgekeurd)\nZonder voorstel: {missing} (blijven niet goedgekeurd)\n\nControleer de maskers voordat u ze goedkeurt. Goedkeuring kan ongedaan worden gemaakt.",
     "sam_range_missing": "Geen voorstellen in dit bereik. Genereer maskers voordat u ze goedkeurt.",
     "sam_revoke": "Goedkeuring intrekken",
     "sam_track": "Onderwerp volgen",

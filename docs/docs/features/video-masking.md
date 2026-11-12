@@ -111,6 +111,12 @@ and discards the unfinished frame. Review the filmstrip overlays, approve the de
 frames individually or with **Approve range**, then save explicitly. Searching an
 interval never approves or saves masks automatically.
 
+Range approval leaves semantic results with no detected objects unapproved and reports their count separately. They remain available for individual review and explicit approval when saving an empty exclusion mask. Completed proposals remain available for range approval after stopping a search or an error. On the Sequence page, use the range action; the single-frame Generate shortcut is available on the Frame page.
+
+Single-frame searches create keyframes, which later range searches preserve even
+if the search terms change. Starting another range search reprocesses all
+unapproved frames that are not keyframes; approve the results you want to protect.
+
 Semantic inference uses native CUDA operations; this feature adds no Torch or
 ONNX Runtime dependency. The model is loaded only when a semantic search is
 requested and is released with SAM.
@@ -224,5 +230,3 @@ b4a981065f3d64fe98cd882f28e5bd3a076b39f5f0c696c7885dbe404bc18fed
 ```
 
 Weights use the existing model cache at `~/.lichtfeld/onnx/`, shared with LPIPS and MoGe. The historical folder name does not indicate a runtime dependency: inference reads `.lfw` directly.
-
-Range approval leaves semantic results with no detected objects unapproved and reports their count separately. They remain available for individual review and explicit approval when saving an empty exclusion mask. Completed proposals remain available for range approval after stopping a search or an error. On the Sequence page, use the range action; the single-frame Generate shortcut is available on the Frame page.

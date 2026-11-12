@@ -2382,7 +2382,10 @@ class ImagePreviewPanel(Panel):
         frame = self._sam_frame_summaries.get(index, {})
         key = ("approved" if frame.get("approved") else "keyframe" if frame.get("keyframe") else
                "proposal" if frame.get("revision") else "pending")
-        status = lf.ui.tr(_sam_key("semantic_no_matches" if frame.get("matched_objects") == 0 else "frame_" + key))
+        status = lf.ui.tr(_sam_key("frame_" + key))
+        if frame.get("matched_objects") == 0:
+            empty = lf.ui.tr(_sam_key("semantic_no_matches"))
+            status = status + " · " + empty if key in ("approved", "keyframe") else empty
         if frame.get("revision") and frame.get("matched_objects") != 0 and not frame.get("reliable") and not frame.get("approved"):
             status += " · " + lf.ui.tr("image_preview.sam_frame_low_confidence")
         return status

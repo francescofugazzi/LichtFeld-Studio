@@ -658,6 +658,8 @@ namespace lfs::vis::gui {
                         if (!prepared)
                             continue;
                         detected = std::move(*prepared);
+                        // Decoder reads are drained; single-frame work no longer needs the loader.
+                        loader.reset();
                     }
                     if (obsolete())
                         continue;

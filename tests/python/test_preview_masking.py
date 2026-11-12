@@ -1620,7 +1620,12 @@ def test_finished_sequence_job_retires_without_inspecting_a_frame_outside_result
     assert not inspections
 
 
-def test_empty_semantic_frame_is_not_reported_as_low_confidence(tracked_sequence):
+@pytest.mark.parametrize("flags, expected", [
+    ({}, "image_preview.sam_semantic_no_matches"),
+    ({"approved": True}, "image_preview.sam_frame_approved · image_preview.sam_semantic_no_matches"),
+    ({"keyframe": True}, "image_preview.sam_frame_keyframe · image_preview.sam_semantic_no_matches"),
+])
+def test_empty_semantic_frame_preserves_review_status_without_low_confidence(tracked_sequence, flags, expected):
     module, panel = tracked_sequence
-    panel._sam_frame_summaries = {0: {"revision": 3, "matched_objects": 0, "reliable": False, "approved": False}}
-    assert panel._sam_frame_status(0) == "image_preview.sam_semantic_no_matches"
+    panel._sam_frame_summaries = {0: {"revision": 3, "matched_objects": 0, "reliable": False, **flags}}
+    assert panel._sam_frame_status(0) == expected
