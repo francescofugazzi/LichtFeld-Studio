@@ -689,6 +689,7 @@ namespace lfs::io::project {
             std::vector<std::shared_ptr<lfs::core::SplatData>> owners;
             std::vector<std::pair<const lfs::core::SplatData*, glm::mat4>> splats;
             std::size_t crop_volumes = 0;
+            std::size_t live_references = 0;
         };
 
         lfs::Result<std::shared_ptr<lfs::core::SplatData>> load_export_payload(
@@ -832,7 +833,13 @@ namespace lfs::io::project {
                     world = glm::make_mat4(found->second->local_transform.data()) * world;
                     parent = found->second->parent_uuid;
                 }
-                if (!visible || (record.payload->reference_uuid && record.payload->fourcc != "DSRC")) {
+                if (!visible) {
+                    continue;
+                }
+                // Live RAD nodes stream an external file and own no resident
+                // splats; they are counted so callers can report the omission.
+                if (record.payload->reference_uuid && record.payload->fourcc != "DSRC") {
+                    ++result.live_references;
                     continue;
                 }
                 auto data = load_export_payload(
@@ -881,7 +888,9 @@ namespace lfs::io::project {
             if (result.splats.empty()) {
                 return fail<ExportSceneData>(
                     lfs::ErrorCode::NotFound, path,
-                    "The project has no visible splats to export.",
+                    result.live_references > 0
+                        ? "The project's visible splats are live RAD nodes, which cannot be exported."
+                        : "The project has no visible splats to export.",
                     "SCNG contains no visible splat payload", "export.scene_graph");
             }
             return result;
@@ -2728,6 +2737,7 @@ namespace lfs::io::project {
             .splats = std::move(merged),
             .node_count = scene->splats.size(),
             .unapplied_crop_volumes = scene->crop_volumes,
+            .skipped_live_rad_nodes = scene->live_references,
         };
     }
 

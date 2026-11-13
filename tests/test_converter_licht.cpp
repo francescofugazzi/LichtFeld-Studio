@@ -401,6 +401,37 @@ namespace {
                 .parent_uuid = moved_splat,
                 .cropbox = CropBoxRecord{.enabled = true},
             }));
+            // A visible live RAD node streams an external file: it is skipped and reported.
+            const auto rad = test_uuid(409);
+            require_status(document->edit_references().upsert(ReferenceRecord{
+                .uuid = rad,
+                .key = "splat.live_rad",
+                .kind = "rad",
+                .locator = {.preferred = "assets/live.rad", .base = LocatorBase::Project},
+                .fingerprint = fingerprint(9),
+                .unresolved = true,
+            }));
+            require_status(document->edit_project().upsert_embed_decision(EmbedDecision{
+                .uuid = rad,
+                .node_uuid = rad,
+                .payload_fourcc = "REFS",
+                .decision = "external",
+                .reference_uuid = rad,
+                .reason = "live RAD remains external",
+            }));
+            require_status(document->edit_scene_graph().upsert_node(SceneNodeRecord{
+                .uuid = rad,
+                .type = "splat",
+                .name = "Live RAD",
+                .parent_uuid = root,
+                .child_order = 4,
+                .payload = PayloadBinding{
+                    .fourcc = "REFS",
+                    .instance_uuid = rad,
+                    .reference_uuid = rad,
+                    .source_kind = "rad",
+                },
+            }));
             const auto saved = document->save(project, save_options(410, 200));
             ASSERT_TRUE(saved) << lfs::format_for_developer(saved.error());
         }
@@ -413,6 +444,7 @@ namespace {
 
         ASSERT_EQ(rc, 0);
         EXPECT_NE(stderr_text.find("1 crop volume(s)"), std::string::npos);
+        EXPECT_NE(stderr_text.find("1 visible live RAD node(s)"), std::string::npos);
         const auto loaded = load_output(output);
         ASSERT_TRUE(loaded);
         ASSERT_EQ(loaded->size(), 5u);

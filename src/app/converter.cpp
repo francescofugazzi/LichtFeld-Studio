@@ -282,6 +282,11 @@ namespace lfs::app {
                              "apply them to the geometry in LichtFeld Studio to include them",
                              scene->unapplied_crop_volumes);
             }
+            if (scene->skipped_live_rad_nodes > 0) {
+                std::println(stderr,
+                             "  Warning: {} visible live RAD node(s) stream from external files and are not exported",
+                             scene->skipped_live_rad_nodes);
+            }
             splat = std::move(scene->splats);
             return true;
         }

@@ -32,7 +32,7 @@ LichtFeld-Studio convert scene.licht scene.spz --sh-degree 2
 their scene transforms, keeps the spherical-harmonic degree published for each Portal asset and removes noise
 infill from each source. Every convert output format and option applies to the merged result. Crop volumes stay
 editable scene filters and are not applied; `convert` prints how many were left out. Apply them to the geometry
-in LichtFeld Studio to include them.
+in LichtFeld Studio to include them. Live RAD nodes stream from an external file and are skipped with a warning.
 
 ## Embed a dataset in a project
 

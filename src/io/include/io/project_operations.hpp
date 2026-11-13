@@ -142,6 +142,9 @@ namespace lfs::io::project {
         // Crop volumes attached to the exported splats. They stay editable
         // scene filters and are not applied to the materialized geometry.
         std::size_t unapplied_crop_volumes = 0;
+        // Visible live RAD nodes reference an external streamed file and are
+        // not part of the merged splats.
+        std::size_t skipped_live_rad_nodes = 0;
     };
 
     struct LFS_IO_API ProjectRepairResult {
