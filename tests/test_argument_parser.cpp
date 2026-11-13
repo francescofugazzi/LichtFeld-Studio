@@ -1429,7 +1429,7 @@ TEST(ArgumentParserTest, ConvertHelpListsLichtProjectInput) {
 
     ASSERT_TRUE(parsed.has_value()) << parsed.error();
     EXPECT_TRUE(std::holds_alternative<lfs::core::args::HelpMode>(*parsed));
-    EXPECT_NE(help.find(".licht (project)"), std::string::npos);
+    EXPECT_NE(help.find(".licht (visible project splats with their scene transforms)"), std::string::npos);
     EXPECT_NE(help.find("LichtFeld-Studio convert project.licht output.ply"), std::string::npos);
 }
 

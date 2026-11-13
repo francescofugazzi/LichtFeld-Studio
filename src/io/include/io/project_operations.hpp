@@ -6,13 +6,19 @@
 #include "core/export.hpp"
 #include "io/project_inspector.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
 #include <vector>
+
+namespace lfs::core {
+    class SplatData;
+} // namespace lfs::core
 
 namespace lfs::io::project {
 
@@ -130,6 +136,14 @@ namespace lfs::io::project {
         std::uint64_t bytes_written = 0;
     };
 
+    struct LFS_IO_API ProjectSplatScene {
+        std::shared_ptr<lfs::core::SplatData> splats;
+        std::size_t node_count = 0;
+        // Crop volumes attached to the exported splats. They stay editable
+        // scene filters and are not applied to the materialized geometry.
+        std::size_t unapplied_crop_volumes = 0;
+    };
+
     struct LFS_IO_API ProjectRepairResult {
         ProjectInspectorCard card;
         std::uint64_t saves_recovered = 0;
@@ -194,6 +208,15 @@ namespace lfs::io::project {
                            const std::optional<TrainingProjectInitialization>& initialization = std::nullopt,
                            ProjectOperationProgress progress = {},
                            ProjectOperationCancel cancel = {});
+
+    // Merge the visible splat nodes of a saved project in project world space:
+    // parent visibility and transforms, the SH degree of each published asset
+    // and removal of each source's noise infill. keep_lod_tree keeps the tree
+    // of a single untransformed LOD source for outputs that store one.
+    [[nodiscard]] LFS_IO_API lfs::Result<ProjectSplatScene>
+    load_project_splats(const std::filesystem::path& path,
+                        bool keep_lod_tree = false,
+                        ProjectOperationCancel cancel = {});
 
     [[nodiscard]] LFS_IO_API lfs::Result<ProjectExportResult>
     export_project_as(const std::filesystem::path& path,

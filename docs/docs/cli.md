@@ -21,6 +21,19 @@ Python: `lichtfeld.io.generate_voxels(path, settings)` and `lichtfeld.io.save_vo
 overwrite=False, transform=[])`. `VoxelSettings` exposes these controls; a progress callback
 returning `False` cancels. Optional transforms are 16 column-major data-world values.
 
+## Convert a project
+
+```sh
+LichtFeld-Studio convert scene.licht scene.ply
+LichtFeld-Studio convert scene.licht scene.spz --sh-degree 2
+```
+
+`convert` reads a `.licht` project like the Project Manager export: it merges the visible splat nodes with
+their scene transforms, keeps the spherical-harmonic degree published for each Portal asset and removes noise
+infill from each source. Every convert output format and option applies to the merged result. Crop volumes stay
+editable scene filters and are not applied; `convert` prints how many were left out. Apply them to the geometry
+in LichtFeld Studio to include them.
+
 ## Embed a dataset in a project
 
 `LichtFeld-Studio licht <project.licht> --embed` embeds the dataset currently referenced by a project. To select a

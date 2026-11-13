@@ -688,6 +688,7 @@ namespace lfs::io::project {
         struct ExportSceneData {
             std::vector<std::shared_ptr<lfs::core::SplatData>> owners;
             std::vector<std::pair<const lfs::core::SplatData*, glm::mat4>> splats;
+            std::size_t crop_volumes = 0;
         };
 
         lfs::Result<std::shared_ptr<lfs::core::SplatData>> load_export_payload(
@@ -810,6 +811,7 @@ namespace lfs::io::project {
                 by_id.emplace(record.uuid, &record);
             }
             ExportSceneData result;
+            std::unordered_set<lfs::core::Uuid> exported;
             for (const auto& record : *records) {
                 if (record.type != "splat" || !record.visible || !record.payload) {
                     continue;
@@ -838,8 +840,43 @@ namespace lfs::io::project {
                 if (!data) {
                     return std::move(data).error();
                 }
+                // Published assets may retain dormant SH bands in their encoded
+                // payload. Preserve each node's published appearance when merging.
+                std::optional<PublishedSplatMetadata> publication;
+                if (record.payload->fourcc == "DSRC" && !record.payload_diverged) {
+                    auto metadata = document->scene_graph().published_splat_metadata(record.uuid);
+                    if (!metadata)
+                        return std::move(metadata).error();
+                    publication = *metadata;
+                }
+                if (publication) {
+                    if (publication->count != static_cast<std::uint64_t>((*data)->size()) ||
+                        publication->sh_degree > (*data)->get_max_sh_degree()) {
+                        return fail<ExportSceneData>(
+                            lfs::ErrorCode::DataLoss, path,
+                            "The published splat metadata does not match its data.", record.name,
+                            "export.publication");
+                    }
+                    (*data)->set_sh_degree(publication->sh_degree);
+                }
+                // Same per-source contract as the GUI export: the merged model
+                // can no longer identify each source's leading infill rows.
+                if (auto kept = lfs::core::without_noise_infill(**data)) {
+                    if (kept->size() == 0) {
+                        continue;
+                    }
+                    *data = std::make_shared<lfs::core::SplatData>(std::move(*kept));
+                }
                 result.owners.push_back(*data);
                 result.splats.emplace_back(result.owners.back().get(), world);
+                exported.insert(record.uuid);
+            }
+            for (const auto& record : *records) {
+                if ((record.type == "cropbox" || record.type == "ellipsoid" ||
+                     record.type == "crop_polygon") &&
+                    record.parent_uuid && exported.contains(*record.parent_uuid)) {
+                    ++result.crop_volumes;
+                }
             }
             if (result.splats.empty()) {
                 return fail<ExportSceneData>(
@@ -2640,6 +2677,15 @@ namespace lfs::io::project {
     }
 
 #ifdef LFS_FORMAT_TEST_TARGET
+    lfs::Result<ProjectSplatScene>
+    load_project_splats(const std::filesystem::path& path, bool, ProjectOperationCancel) {
+        return fail<ProjectSplatScene>(
+            lfs::ErrorCode::Unsupported, path,
+            "Project export is unavailable in the CPU format-test composition.",
+            "the full I/O library is required for closed-file splat export",
+            "export.composition");
+    }
+
     lfs::Result<ProjectExportResult>
     export_project_as(const std::filesystem::path& path,
                       const ProjectExportFormat,
@@ -2653,6 +2699,38 @@ namespace lfs::io::project {
             "export.composition");
     }
 #else
+    lfs::Result<ProjectSplatScene>
+    load_project_splats(const std::filesystem::path& path,
+                        const bool keep_lod_tree,
+                        ProjectOperationCancel cancel) {
+        auto scene = load_export_scene(path, cancel);
+        if (!scene) {
+            return std::move(scene).error();
+        }
+        // The loaded sources are private to this call, so a lone untransformed
+        // source can be borrowed instead of copied. Other LOD sources must be
+        // flattened to their leaves unless the output stores the tree.
+        const auto& [first, transform] = scene->splats.front();
+        const bool lod_tree = first->lod_tree && first->lod_tree->has_tree();
+        const auto storage = scene->splats.size() == 1 && transform == glm::mat4{1.0f} &&
+                                     (keep_lod_tree || !lod_tree)
+                                 ? lfs::core::Scene::MergeStorageMode::BorrowSingleIdentity
+                                 : lfs::core::Scene::MergeStorageMode::Clone;
+        std::shared_ptr<lfs::core::SplatData> merged =
+            lfs::core::Scene::mergeSplatsWithTransforms(scene->splats, storage);
+        if (!merged || merged->size() == 0) {
+            return fail<ProjectSplatScene>(
+                lfs::ErrorCode::DataLoss, path,
+                "The project did not produce any exportable splats.",
+                "visible splat materialization returned no gaussians", "export.splats");
+        }
+        return ProjectSplatScene{
+            .splats = std::move(merged),
+            .node_count = scene->splats.size(),
+            .unapplied_crop_volumes = scene->crop_volumes,
+        };
+    }
+
     lfs::Result<ProjectExportResult>
     export_project_as(const std::filesystem::path& path,
                       const ProjectExportFormat format,
@@ -2687,17 +2765,11 @@ namespace lfs::io::project {
         if (progress) {
             progress(0.05F, "Loading visible splats");
         }
-        auto scene = load_export_scene(path, cancel);
+        auto scene = load_project_splats(path, false, cancel);
         if (!scene) {
             return std::move(scene).error();
         }
-        auto merged = lfs::core::Scene::mergeSplatsWithTransforms(scene->splats);
-        if (!merged || merged->size() == 0) {
-            return fail<ProjectExportResult>(
-                lfs::ErrorCode::DataLoss, path,
-                "The project did not produce any exportable splats.",
-                "visible splat materialization returned no gaussians", "export.splats");
-        }
+        const auto& merged = scene->splats;
         auto latest = ProjectReader::open(path);
         if (!latest) {
             return std::move(latest).error();
