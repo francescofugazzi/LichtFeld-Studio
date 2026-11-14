@@ -30,9 +30,14 @@ LichtFeld-Studio convert scene.licht scene.spz --sh-degree 2
 
 `convert` reads a `.licht` project like the Project Manager export: it merges the visible splat nodes with
 their scene transforms, keeps the spherical-harmonic degree published for each Portal asset and removes noise
-infill from each source. Every convert output format and option applies to the merged result. Crop volumes stay
-editable scene filters and are not applied; `convert` prints how many were left out. Apply them to the geometry
-in LichtFeld Studio to include them. Live RAD nodes stream from an external file and are skipped with a warning.
+infill from each source. Every convert output format and option applies to the merged result. The output holds
+only these splats, not the whole scene. Crop volumes are not applied; `convert` reports how many it ignored, so
+apply them to the geometry in LichtFeld Studio first when the output must be cropped. Live RAD nodes stream from
+an external file and are skipped with a warning.
+
+`LichtFeld-Studio convert --capabilities` prints one stable identifier per line. Builds with this project
+export print `visible-project-splats-v1`; older builds reject the option. Scripts should check that line instead
+of the help text.
 
 ## Embed a dataset in a project
 
