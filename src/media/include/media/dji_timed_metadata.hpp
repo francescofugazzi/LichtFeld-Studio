@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 #include "media/media_probe.hpp"
+#include <memory>
+#include <span>
+#include <utility>
 
 namespace lfs::media {
     struct DjiSample {
@@ -18,4 +21,28 @@ namespace lfs::media {
     // One sample per packet; optional values track the containing message.
     [[nodiscard]] LFS_MEDIA_API Result<std::vector<DjiSample>> interpretDjiMetadata(
         const TimedMetadataObservation& observation);
+    struct DjiFrameSample {
+        Timestamp pts;
+        DjiSample metadata;
+        std::optional<std::int64_t> source_offset;
+        std::vector<std::uint8_t> bytes;
+    };
+    struct DjiFrameStorage;
+    // Explicit binding to the same container presentation clock as the video.
+    // Exact PTS matches only; no camera-clock conversion, hold or interpolation.
+    // Copies share immutable samples. Missing, duplicate or decreasing
+    // packet PTS are refused when constructing the binding, before image output.
+    // A track has one positive time base. Missing-PTS sentinels and query
+    // conversions outside int64 stream ticks are rejected, not rounded.
+    class LFS_MEDIA_API DjiFrameMetadata {
+    public:
+        [[nodiscard]] static Result<DjiFrameMetadata> create(const TimedMetadataObservation&);
+        [[nodiscard]] int streamIndex() const noexcept;
+        [[nodiscard]] std::span<const DjiFrameSample> samples() const noexcept;
+        [[nodiscard]] Result<std::optional<std::size_t>> lookup(Timestamp) const;
+
+    private:
+        explicit DjiFrameMetadata(std::shared_ptr<const DjiFrameStorage> storage) : storage_(std::move(storage)) {}
+        std::shared_ptr<const DjiFrameStorage> storage_;
+    };
 } // namespace lfs::media

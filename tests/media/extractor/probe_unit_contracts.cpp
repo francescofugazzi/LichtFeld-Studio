@@ -5,6 +5,7 @@
 #include "core/source_metadata.hpp"
 #include "media/decoded_video_frame_ffmpeg.hpp"
 #include "media/dji_timed_metadata.hpp"
+#include "media/image_sequence.hpp"
 #include "media/media_ingest.hpp"
 #include "media/media_json.hpp"
 #include "media/media_probe_ffmpeg.hpp"
@@ -473,6 +474,127 @@ namespace {
         const auto unknown = interpretDjiMetadata(broken);
         require(unknown && (*unknown)[1].quaternion_wxyz == std::array<float, 4>{} && !(*unknown)[1].iso,
                 "present messages use proto3 zero defaults while absent messages stay absent");
+        auto timed = broken;
+        timed.packets.resize(4);
+        for (std::size_t i = 1; i < timed.packets.size(); ++i)
+            timed.packets[i].bytes = timestamp;
+        timed.stream_index = 2;
+        for (std::size_t i = 0; i < timed.packets.size(); ++i)
+            timed.packets[i].pts = Timestamp{static_cast<std::int64_t>(i) * 1001 - 1001, {1, 60000}};
+        auto binding = DjiFrameMetadata::create(timed);
+        require(binding && binding->samples().size() == 4, "bind packets to explicit presentation clocks");
+        require(binding->lookup({-1001, {1, 60000}})->value() == 0 &&
+                    binding->lookup({1001, {1, 30000}})->value() == 3,
+                "negative and exactly equivalent rational PTS match without rounding");
+        require(!binding->lookup({1, {1, 60000}})->has_value() && !binding->lookup({1, {1, 120000}})->has_value() &&
+                    !binding->lookup({-1, {1, 120000}})->has_value(),
+                "gaps and fractional stream ticks never round into a match");
+        require(!binding->lookup({std::numeric_limits<std::int64_t>::max(), {std::numeric_limits<int>::max(), 1}}) &&
+                    !binding->lookup({std::numeric_limits<std::int64_t>::min(), {1, 60000}}),
+                "unrepresentable conversions and missing-PTS sentinel are refused");
+        require(!binding->lookup({std::numeric_limits<std::int64_t>::max(), {1, 60000}})->has_value(),
+                "representable extreme stream ticks remain valid unmatched queries");
+        require(!binding->lookup({0, {0, 1}}) && !binding->lookup({0, {1, 0}}), "invalid query time bases are refused");
+        auto changed = timed;
+        changed.packets[1].pts.reset();
+        require(!DjiFrameMetadata::create(changed), "missing PTS cannot be replaced by DTS, sequence or camera ticks");
+        changed = timed;
+        changed.packets[1].pts = changed.packets[0].pts;
+        require(!DjiFrameMetadata::create(changed), "duplicate PTS cannot silently select one of two samples");
+        changed.packets[1].pts = Timestamp{-2002, {1, 60000}};
+        require(!DjiFrameMetadata::create(changed), "backward discontinuity is refused before publication");
+        changed = timed;
+        changed.packets[2].pts->time_base.denominator = -1;
+        require(!DjiFrameMetadata::create(changed), "invalid packet time base is refused");
+        changed = timed;
+        changed.packets[2].pts->time_base = {1, 30000};
+        require(!DjiFrameMetadata::create(changed), "a caller cannot mix clocks within a single stream observation");
+        changed = timed;
+        changed.packets[0].pts->ticks = std::numeric_limits<std::int64_t>::min();
+        require(!DjiFrameMetadata::create(changed), "missing-PTS sentinel cannot become a real frame sample");
+        changed = timed;
+        changed.stream_index = -1;
+        require(!DjiFrameMetadata::create(changed), "missing selected track identity is refused");
+        changed = timed;
+        changed.packets.resize(3);
+        for (std::size_t i = 0; i < changed.packets.size(); ++i)
+            changed.packets[i].pts->ticks = std::numeric_limits<std::int64_t>::max() - 2 + static_cast<std::int64_t>(i);
+        auto extreme = DjiFrameMetadata::create(changed);
+        require(extreme && extreme->lookup({std::numeric_limits<std::int64_t>::max(), {2, 120000}})->value() == 2,
+                "equivalent time bases preserve valid extreme packet timestamps");
+        require(!extreme->lookup({std::numeric_limits<std::int64_t>::max(), {1, 30000}}),
+                "overflow cannot compare as an equal extreme sample");
+        changed = timed;
+        changed.packets[1].bytes = {0xff};
+        require(!DjiFrameMetadata::create(changed), "frame binding uses the canonical corruption checks");
+        const auto preserved = json_detail::djiFrameLookup(*binding, {-1001, {1, 60000}});
+        require(preserved && (*preserved)["match"]["bytes"] == json_detail::hexBytes(timed.packets[0].bytes) &&
+                    (*preserved)["match"]["metadata"]["sequence"] == 0,
+                "matched frame retains exact packet bytes and proto3 zero values");
+        require(!json_detail::djiFrameLookup(*binding, {-1001, {1, 60000}}, 0), "serialization refuses an oversized frame payload before hex allocation");
+        const auto output = std::filesystem::temp_directory_path() / ("lfs-dji-frame-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+        struct OutputDirectory {
+            std::filesystem::path path;
+            ~OutputDirectory() {
+                try {
+                    std::error_code ec;
+                    std::filesystem::remove_all(path, ec);
+                } catch (const std::exception&) {}
+            }
+        } cleanup{output};
+        ImageSequenceOptions rendered_options;
+        rendered_options.files.output_directory = output / "render";
+        rendered_options.files.dji_metadata = *binding;
+        rendered_options.layout = {2, 2, 6, FramePixelFormat::RGB8};
+        rendered_options.frame_count = 1;
+        const auto render_validation = validateImageSequenceOptions(rendered_options);
+        require(!render_validation && render_validation.error().code() == lfs::ErrorCode::InvalidArgument &&
+                    !std::filesystem::exists(rendered_options.files.output_directory),
+                "render sequence refuses source DJI telemetry during preflight");
+        MediaDescription description;
+        description.source_metadata.emplace();
+        auto catalog = catalogContainerMetadata(std::move(description));
+        require(bool(catalog), "static observation for public frame writer");
+        SinkSession session;
+        session.source_metadata = std::make_shared<const SourceMetadataCatalog>(*catalog);
+        const auto write_frame = [&](FrameInfo info) {
+            FileFrameSinkOptions options;
+            options.output_directory = output;
+            options.embed_source_metadata = true;
+            options.dji_metadata = *binding;
+            FileFrameSink sink(std::move(options));
+            require(bool(sink.begin(session)), "begin DJI public frame writer");
+            std::array<std::uint8_t, 12> pixels{};
+            info.legacy_source_frame = 1;
+            auto written = sink.write({{2, 2, 6, FramePixelFormat::RGB8}, info, pixels});
+            sink.abort({written ? SinkOutcome::Completed : SinkOutcome::Failed, written ? 1u : 0u, {}});
+            return written;
+        };
+        FrameInfo decoded_frame;
+        decoded_frame.origin = FrameOrigin::Decoded;
+        decoded_frame.timestamp_origin = TimestampOrigin::Presentation;
+        decoded_frame.source_timestamp = Timestamp{-1001, {1, 60000}};
+        require(bool(write_frame(decoded_frame)), "public frame writer consumes the exact-PTS observation");
+        const auto written_catalog = MediaIngest::sourceMetadata(output / "frame_1.png");
+        require(written_catalog && written_catalog->imageXmp().blocks.size() == 1, "read back DJI image XMP");
+        const auto& packet_bytes = written_catalog->imageXmp().blocks[0].bytes;
+        const std::string xmp(packet_bytes.begin(), packet_bytes.end());
+        require(xmp.find("DjiObservation") != std::string::npos && xmp.find("dji-exact-pts-v1") != std::string::npos,
+                "shared image writer preserves the DJI association record");
+        decoded_frame.origin = FrameOrigin::Rendered;
+        const auto rendered = write_frame(decoded_frame);
+        require(!rendered && rendered.error().code() == lfs::ErrorCode::FailedPrecondition, "rendered frames cannot inherit DJI camera observations");
+        decoded_frame.origin = FrameOrigin::Decoded;
+        decoded_frame.source_timestamp.reset();
+        const auto missing_clock = write_frame(decoded_frame);
+        require(!missing_clock && missing_clock.error().code() == lfs::ErrorCode::FailedPrecondition &&
+                    missing_clock.error().detail().find("source timestamp") != std::string_view::npos,
+                "missing source timestamps cannot manufacture DJI associations");
+        auto shared = *binding;
+        timed.packets.clear();
+        binding = DjiFrameMetadata::create(broken);
+        require(shared.lookup({-1001, {1, 60000}})->value() == 0 && shared.samples()[0].metadata.sequence == 0,
+                "immutable frame binding owns its data after input release and sibling reassignment");
     }
     void timedPacketContracts() {
         using namespace lfs::media;

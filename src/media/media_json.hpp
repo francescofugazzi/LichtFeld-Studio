@@ -347,17 +347,30 @@ namespace lfs::media::json_detail {
         default: return "none";
         }
     }
+    inline json djiSample(const DjiSample& sample) {
+        return {{"sequence", sample.sequence}, {"camera_timestamp", sample.camera_timestamp}, {"iso", optional(sample.iso)}, {"exposure_time_ratio", optional(sample.exposure_time_ratio)}, {"white_balance_cct", optional(sample.white_balance_cct)}, {"quaternion_wxyz", optional(sample.quaternion_wxyz)}, {"accelerometer_xyz", optional(sample.accelerometer_xyz)}, {"gps_status", optional(sample.gps_status)}};
+    }
     inline json djiMetadata(const std::vector<DjiSample>& samples) {
         json result{{"samples", json::array()}};
         for (const auto& sample : samples)
-            result["samples"].push_back({{"sequence", sample.sequence},
-                                         {"camera_timestamp", sample.camera_timestamp},
-                                         {"iso", optional(sample.iso)},
-                                         {"exposure_time_ratio", optional(sample.exposure_time_ratio)},
-                                         {"white_balance_cct", optional(sample.white_balance_cct)},
-                                         {"quaternion_wxyz", optional(sample.quaternion_wxyz)},
-                                         {"accelerometer_xyz", optional(sample.accelerometer_xyz)},
-                                         {"gps_status", optional(sample.gps_status)}});
+            result["samples"].push_back(djiSample(sample));
+        return result;
+    }
+    inline json djiFrameBinding(const DjiFrameMetadata& binding) {
+        return {{"policy", "dji-exact-pts-v1"}, {"stream_index", binding.streamIndex()}};
+    }
+    inline json djiFrameSample(const DjiFrameSample& sample) {
+        return {{"pts", timestamp(sample.pts)}, {"source_offset", optional(sample.source_offset)}, {"bytes", hexBytes(sample.bytes)}, {"metadata", djiSample(sample.metadata)}};
+    }
+    inline Result<json> djiFrameLookup(const DjiFrameMetadata& binding, Timestamp query, std::size_t payload_limit = timed_metadata_maxima.bytes) {
+        const auto match = binding.lookup(query);
+        if (!match)
+            return match.error();
+        if (*match && binding.samples()[**match].bytes.size() > payload_limit)
+            return make_error({.code = ErrorCode::ResourceExhausted, .domain = ErrorDomain::IO, .detail = "DJI frame payload exceeds serialization budget (bytes=" + std::to_string(binding.samples()[**match].bytes.size()) + ", limit=" + std::to_string(payload_limit) + ")", .detection = LFS_SOURCE_SITE_CURRENT()});
+        auto result = djiFrameBinding(binding);
+        result["query"] = timestamp(query);
+        result["match"] = *match ? djiFrameSample(binding.samples()[**match]) : json(nullptr);
         return result;
     }
     inline json timedMetadata(const TimedMetadataObservation& observation) {
