@@ -129,7 +129,7 @@ namespace lfs::python {
                 nb::gil_scoped_release release;
                 auto result = DjiFrameMetadata::create(*value.timed_metadata);
                 if (!result) throw Exception(result.error());
-                return std::move(*result); }, "Bind collected DJI Action 4/5 packets to their container PTS for frames from the same source.");
+                return std::move(*result); }, "Bind collected DJI packets to their container PTS for frames from the same source.");
         nb::class_<FrameLayout>(m, "FrameLayout").def_ro("width", &FrameLayout::width).def_ro("height", &FrameLayout::height).def_ro("row_stride", &FrameLayout::row_stride).def_ro("format", &FrameLayout::format).def_ro("color", &FrameLayout::color);
         nb::class_<FrameInfo>(m, "FrameInfo").def(nb::init<>()).def_rw("source_timestamp", &FrameInfo::source_timestamp).def_rw("timestamp_origin", &FrameInfo::timestamp_origin).def_rw("decode_index", &FrameInfo::decode_index).def_rw("delivery_index", &FrameInfo::delivery_index).def_rw("relative_seconds", &FrameInfo::relative_seconds).def_rw("legacy_source_frame", &FrameInfo::legacy_source_frame).def_rw("sharpness_score", &FrameInfo::sharpness_score).def_rw("origin", &FrameInfo::origin).def_rw("output_timestamp", &FrameInfo::output_timestamp).def_rw("source_component_depth", &FrameInfo::source_component_depth);
         nb::class_<IngestProgress>(m, "IngestProgress").def_ro("processed", &IngestProgress::processed).def_ro("estimated", &IngestProgress::estimated).def_ro("discarded", &IngestProgress::discarded);

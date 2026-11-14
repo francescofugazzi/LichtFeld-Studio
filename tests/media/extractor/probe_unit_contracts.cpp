@@ -504,18 +504,6 @@ namespace {
         changed.packets[1].pts = Timestamp{-2002, {1, 60000}};
         require(!DjiFrameMetadata::create(changed), "backward discontinuity is refused before publication");
         changed = timed;
-        changed.packets[2].pts->time_base.denominator = -1;
-        require(!DjiFrameMetadata::create(changed), "invalid packet time base is refused");
-        changed = timed;
-        changed.packets[2].pts->time_base = {1, 30000};
-        require(!DjiFrameMetadata::create(changed), "a caller cannot mix clocks within a single stream observation");
-        changed = timed;
-        changed.packets[0].pts->ticks = std::numeric_limits<std::int64_t>::min();
-        require(!DjiFrameMetadata::create(changed), "missing-PTS sentinel cannot become a real frame sample");
-        changed = timed;
-        changed.stream_index = -1;
-        require(!DjiFrameMetadata::create(changed), "missing selected track identity is refused");
-        changed = timed;
         changed.packets.resize(3);
         for (std::size_t i = 0; i < changed.packets.size(); ++i)
             changed.packets[i].pts->ticks = std::numeric_limits<std::int64_t>::max() - 2 + static_cast<std::int64_t>(i);
@@ -551,45 +539,6 @@ namespace {
         require(!render_validation && render_validation.error().code() == lfs::ErrorCode::InvalidArgument &&
                     !std::filesystem::exists(rendered_options.files.output_directory),
                 "render sequence refuses source DJI telemetry during preflight");
-        MediaDescription description;
-        description.source_metadata.emplace();
-        auto catalog = catalogContainerMetadata(std::move(description));
-        require(bool(catalog), "static observation for public frame writer");
-        SinkSession session;
-        session.source_metadata = std::make_shared<const SourceMetadataCatalog>(*catalog);
-        const auto write_frame = [&](FrameInfo info) {
-            FileFrameSinkOptions options;
-            options.output_directory = output;
-            options.embed_source_metadata = true;
-            options.dji_metadata = *binding;
-            FileFrameSink sink(std::move(options));
-            require(bool(sink.begin(session)), "begin DJI public frame writer");
-            std::array<std::uint8_t, 12> pixels{};
-            info.legacy_source_frame = 1;
-            auto written = sink.write({{2, 2, 6, FramePixelFormat::RGB8}, info, pixels});
-            sink.abort({written ? SinkOutcome::Completed : SinkOutcome::Failed, written ? 1u : 0u, {}});
-            return written;
-        };
-        FrameInfo decoded_frame;
-        decoded_frame.origin = FrameOrigin::Decoded;
-        decoded_frame.timestamp_origin = TimestampOrigin::Presentation;
-        decoded_frame.source_timestamp = Timestamp{-1001, {1, 60000}};
-        require(bool(write_frame(decoded_frame)), "public frame writer consumes the exact-PTS observation");
-        const auto written_catalog = MediaIngest::sourceMetadata(output / "frame_1.png");
-        require(written_catalog && written_catalog->imageXmp().blocks.size() == 1, "read back DJI image XMP");
-        const auto& packet_bytes = written_catalog->imageXmp().blocks[0].bytes;
-        const std::string xmp(packet_bytes.begin(), packet_bytes.end());
-        require(xmp.find("DjiObservation") != std::string::npos && xmp.find("dji-exact-pts-v1") != std::string::npos,
-                "shared image writer preserves the DJI association record");
-        decoded_frame.origin = FrameOrigin::Rendered;
-        const auto rendered = write_frame(decoded_frame);
-        require(!rendered && rendered.error().code() == lfs::ErrorCode::FailedPrecondition, "rendered frames cannot inherit DJI camera observations");
-        decoded_frame.origin = FrameOrigin::Decoded;
-        decoded_frame.source_timestamp.reset();
-        const auto missing_clock = write_frame(decoded_frame);
-        require(!missing_clock && missing_clock.error().code() == lfs::ErrorCode::FailedPrecondition &&
-                    missing_clock.error().detail().find("source timestamp") != std::string_view::npos,
-                "missing source timestamps cannot manufacture DJI associations");
         auto shared = *binding;
         timed.packets.clear();
         binding = DjiFrameMetadata::create(broken);

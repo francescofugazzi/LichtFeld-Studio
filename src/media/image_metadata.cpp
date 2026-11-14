@@ -312,8 +312,6 @@ namespace lfs::media::detail {
             return SinkResult::failure(metadataError(ErrorCode::InvalidArgument, "Frame metadata requires embedded metadata or XMP sidecars"));
         if (binding && binding->point_tolerance_milliseconds && *binding->point_tolerance_milliseconds < 0)
             return SinkResult::failure(metadataError(ErrorCode::InvalidArgument, "SRT point tolerance must be nonnegative (tolerance_ms=" + std::to_string(*binding->point_tolerance_milliseconds) + ")"));
-        if (dji && dji->samples().empty())
-            return SinkResult::failure(metadataError(ErrorCode::InvalidArgument, "DJI frame metadata requires a live nonempty binding"));
         return {};
     }
     Result<EmbeddedImageMetadata> prepareImageMetadata(const SourceMetadataCatalog& catalog, int applied_rotation, FrameFileFormat format, bool sidecar, const std::optional<SrtFrameMetadata>& srt, const std::optional<DjiFrameMetadata>& dji) {

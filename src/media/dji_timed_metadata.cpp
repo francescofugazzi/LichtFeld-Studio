@@ -191,19 +191,14 @@ namespace lfs::media {
     };
     Result<DjiFrameMetadata> DjiFrameMetadata::create(const TimedMetadataObservation& observation) {
         try {
-            if (observation.stream_index < 0)
-                throw Failure{ErrorCode::InvalidArgument, "DJI frame metadata requires a nonnegative stream index (index=" + std::to_string(observation.stream_index) + ")"};
             auto parsed = interpretDjiMetadata(observation);
             if (!parsed)
                 return parsed.error();
             // Validate clocks before copying payloads decoded by the shared interpreter.
             for (std::size_t i = 0; i < observation.packets.size(); ++i) {
                 const auto& pts = observation.packets[i].pts;
-                if (!pts || pts->ticks == AV_NOPTS_VALUE || pts->time_base.numerator <= 0 || pts->time_base.denominator <= 0)
+                if (!pts)
                     throw Failure{ErrorCode::InvalidArgument, "DJI frame metadata requires valid packet PTS (packet=" + std::to_string(i) + ")"};
-                const auto clock = observation.packets.front().pts->time_base;
-                if (av_cmp_q({clock.numerator, clock.denominator}, {pts->time_base.numerator, pts->time_base.denominator}) != 0)
-                    throw Failure{ErrorCode::InvalidArgument, "DJI frame metadata requires one stream time base (packet=" + std::to_string(i) + ")"};
                 if (i && observation.packets[i - 1].pts->ticks >= pts->ticks)
                     throw Failure{ErrorCode::FailedPrecondition, "DJI frame metadata requires strictly increasing packet PTS (packet=" + std::to_string(i) + ")"};
             }

@@ -59,11 +59,10 @@ def dji_ac204(directory, *, with_video=False, ffmpeg="ffmpeg", padding=b""):
     if with_video:
         samples = samples[:6]
         # Keep the video mdat offsets unchanged and append a separate data mdat.
-        # This is a synthetic carrier, not a reconstructed camera original.
         video = directory / "dji-carrier-video.mp4"
         run([ffmpeg, "-v", "error", "-y", "-f", "lavfi", "-i",
                         "testsrc2=size=64x32:rate=30000/1001", "-frames:v", "6",
-                        "-c:v", "mpeg4", "-bf", "0", "-colorspace", "bt709", "-color_trc", "bt709", "-color_primaries", "bt709", "-color_range", "tv", "-movflags", "+write_colr", str(video)])
+                        "-c:v", "mpeg4", "-bf", "2", "-colorspace", "bt709", "-color_trc", "bt709", "-color_primaries", "bt709", "-color_range", "tv", "-movflags", "+write_colr", str(video)])
         import importlib.util
         spec = importlib.util.spec_from_file_location("srt_fixture", Path(__file__).resolve().parents[1] / "tests/media/srt_metadata_fixture.py")
         helper = importlib.util.module_from_spec(spec)

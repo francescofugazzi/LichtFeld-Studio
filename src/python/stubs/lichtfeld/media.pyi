@@ -738,7 +738,7 @@ class MediaDescription:
 
     def dji_frame_metadata(self) -> DjiFrameMetadata:
         """
-        Bind collected DJI Action 4/5 packets to their container PTS for frames from the same source.
+        Bind collected DJI packets to their container PTS for frames from the same source.
         """
 
 class FrameLayout:

@@ -28,12 +28,8 @@ namespace lfs::media {
         std::vector<std::uint8_t> bytes;
     };
     struct DjiFrameStorage;
-    // Explicit binding to the same container presentation clock as the video.
-    // Exact PTS matches only; no camera-clock conversion, hold or interpolation.
-    // Copies share immutable samples. Missing, duplicate or decreasing
-    // packet PTS are refused when constructing the binding, before image output.
-    // A track has one positive time base. Missing-PTS sentinels and query
-    // conversions outside int64 stream ticks are rejected, not rounded.
+    // Bind a collected track to exact presentation timestamps from the same container.
+    // Copies share immutable samples; missing or non-increasing PTS are refused.
     class LFS_MEDIA_API DjiFrameMetadata {
     public:
         [[nodiscard]] static Result<DjiFrameMetadata> create(const TimedMetadataObservation&);

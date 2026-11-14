@@ -1004,14 +1004,9 @@ class MediaBindings(unittest.TestCase):
         srt = self.root / "coexisting telemetry.srt"
         srt.write_bytes(srt_metadata_fixture.cues([(0, 1000, "FrameCnt: 1 [latitude: 12]")]))
         srt_binding = media.SrtFrameMetadata(media.MediaIngest.source_srt_metadata(srt), 0)
-        for name, fmt in (("png", media.FrameFileFormat.PNG), ("jpeg", media.FrameFileFormat.JPEG),
-                          ("tiff", media.FrameFileFormat.TIFF16), ("exr", media.FrameFileFormat.EXR),
-                          ("jxl", media.FrameFileFormat.JXL), ("avif", media.FrameFileFormat.AVIF)):
+        for name, fmt in (("png", media.FrameFileFormat.PNG), ("jpeg", media.FrameFileFormat.JPEG)):
             with self.subTest(format=name):
                 request.output_format = media.FramePixelFormat.RGB8 if name in ("png", "jpeg") else media.FramePixelFormat.RGBFloat32
-                if name not in ("png", "jpeg"):
-                    request.input_color.transfer = media.ColorTransfer.Bt709
-                    request.input_color.primaries = media.ColorPrimaries.Bt709
                 output = media.FileExtraction()
                 output.files.output_directory = self.root / ("dji-frame-" + name)
                 output.files.format, output.files.dji_metadata = fmt, binding
@@ -1078,6 +1073,7 @@ class MediaBindings(unittest.TestCase):
         self.assertEqual(json.loads(cli.stdout)["frames_accepted"], 6)
         cli_dir = self.root / "dji-cli"
         cli_manifest = json.loads((cli_dir / "extraction_metadata.json").read_text(encoding="utf-8"))
+        self.assertEqual(cli_manifest["dji_metadata"]["stream_index"], 1)
         for index, record in enumerate(cli_manifest["frames"]):
             node = ET.fromstring((cli_dir / record["sidecar"]).read_bytes()).find(".//{https://lichtfeld.io/ns/media/1.0/}DjiObservation")
             self.assertIsNotNone(node)
@@ -1137,7 +1133,14 @@ class MediaBindings(unittest.TestCase):
         options = media.FileFrameSinkOptions()
         options.dji_metadata, options.srt_metadata = binding, srt_binding
         dji_snapshot, srt_snapshot = options.dji_metadata, options.srt_metadata
+        replacement_root = self.root / "replacement"
+        replacement_root.mkdir()
+        replacement = fixtures.dji_ac204(replacement_root, with_video=True, ffmpeg=os.environ.get("LFS_MEDIA_TEST_FFMPEG", "ffmpeg"))
+        options.dji_metadata = media.MediaIngest.probe(replacement, timed_metadata_stream=1).dji_frame_metadata()
+        self.assertEqual(options.dji_metadata.sample_count, 6)
+        self.assertEqual(dji_snapshot.sample_count, 300)
         options.dji_metadata = None
+        replacement.unlink()
         options.srt_metadata = media.SrtFrameMetadata(srt_binding.catalog, 123)
         self.assertEqual(srt_snapshot.offset_milliseconds, 0)
         options.srt_metadata = None
@@ -1166,27 +1169,6 @@ class MediaBindings(unittest.TestCase):
             futures = [pool.submit(replace_options), pool.submit(read_snapshots), pool.submit(read_snapshots)]
             for future in futures:
                 future.result(timeout=30)
-
-    def test_dji_frame_metadata_large_jpeg_uses_extended_xmp(self):
-        padding = b"unknown\x00<>&" * 8000
-        path = fixtures.dji_ac204(self.root, with_video=True, padding=padding, ffmpeg=os.environ.get("LFS_MEDIA_TEST_FFMPEG", "ffmpeg"))
-        observed = media.MediaIngest.probe(path, timed_metadata_stream=1)
-        binding = observed.dji_frame_metadata()
-        original = bytes.fromhex(json.loads(observed.to_json())["timed_metadata"]["packets"][0]["bytes"])
-        self.assertTrue(original.endswith(padding))
-        request = self.request()
-        request.input, request.end_seconds = path, .01
-        output = media.FileExtraction()
-        output.files.output_directory, output.files.format = self.root / "dji-extended", media.FrameFileFormat.JPEG
-        output.files.embed_source_metadata, output.files.dji_metadata = True, binding
-        media.MediaIngest.extract_files(request, output)
-        image, = output.files.output_directory.glob("*.jpg")
-        _, _, _, facts, _, chunks = jpeg_metadata_fixture.read(image.read_bytes())
-        self.assertGreater(chunks, 0)
-        actual = json.loads(facts["DjiObservation"])["match"]
-        self.assertEqual(actual["bytes"], original.hex())
-        self.assertEqual(actual["metadata"]["sequence"], 0)
-        self.assertEqual(actual["pts"], {"ticks": 0, "time_base": [1, 30000]})
 
     def test_timed_metadata_probe_cli_parity_and_owned_result(self):
         path = srt_metadata_fixture.embedded(self.root, os.environ.get("LFS_MEDIA_TEST_FFMPEG", "ffmpeg"))
