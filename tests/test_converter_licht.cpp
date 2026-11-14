@@ -18,9 +18,11 @@
 #include "core/path_utils.hpp"
 #include "core/splat_data.hpp"
 #include "core/splat_data_transform.hpp"
+#include "io/exporter.hpp"
 #include "io/formats/ply.hpp"
 #include "io/loader.hpp"
 #include "io/project_document.hpp"
+#include "io/project_operations.hpp"
 #include "licht_test_support.hpp"
 #include "training/checkpoint.hpp"
 #include "training/strategies/mcmc.hpp"
@@ -375,9 +377,10 @@ namespace {
         EXPECT_EQ(loaded->size(), 5u);
     }
 
-    TEST_F(ConverterLichtTest, AppliesSceneVisibilityAndTransformsAndReportsCrops) {
+    TEST_F(ConverterLichtTest, AppliesSceneVisibilityTransformsCropsAndLiveRad) {
         const auto project = temp_dir / "scene.licht";
         const auto output = temp_dir / "scene.ply";
+        ASSERT_TRUE(save_rad(*make_splat(2), {.output_path = temp_dir / "live.rad"}));
         {
             auto document = make_empty_document(test_uuid(400), 100);
             const auto root = test_uuid(401);
@@ -399,15 +402,15 @@ namespace {
                 .type = "cropbox",
                 .name = "Crop",
                 .parent_uuid = moved_splat,
-                .cropbox = CropBoxRecord{.enabled = true},
+                .cropbox = CropBoxRecord{.min = {-1, -1, -1}, .max = {0.5f, 1, 1}, .enabled = true},
             }));
-            // A visible live RAD node streams an external file: it is skipped and reported.
+            // External RAD participates in the merged export, with its node transform.
             const auto rad = test_uuid(409);
             require_status(document->edit_references().upsert(ReferenceRecord{
                 .uuid = rad,
                 .key = "splat.live_rad",
                 .kind = "rad",
-                .locator = {.preferred = "assets/live.rad", .base = LocatorBase::Project},
+                .locator = {.preferred = "live.rad", .base = LocatorBase::Project},
                 .fingerprint = fingerprint(9),
                 .unresolved = true,
             }));
@@ -425,6 +428,7 @@ namespace {
                 .name = "Live RAD",
                 .parent_uuid = root,
                 .child_order = 4,
+                .local_transform = translation(20, 0, 0),
                 .payload = PayloadBinding{
                     .fourcc = "REFS",
                     .instance_uuid = rad,
@@ -443,14 +447,147 @@ namespace {
         const auto stderr_text = testing::internal::GetCapturedStderr();
 
         ASSERT_EQ(rc, 0);
-        EXPECT_NE(stderr_text.find("1 crop volume(s)"), std::string::npos);
-        EXPECT_NE(stderr_text.find("1 visible live RAD node(s)"), std::string::npos);
+        EXPECT_EQ(stderr_text.find("not applied"), std::string::npos);
+        EXPECT_EQ(stderr_text.find("not exported"), std::string::npos);
         const auto loaded = load_output(output);
         ASSERT_TRUE(loaded);
-        ASSERT_EQ(loaded->size(), 5u);
-        EXPECT_EQ(sorted_column(*loaded, 0), (std::vector<float>{0, 1, 2, 10, 11}));
-        EXPECT_EQ(sorted_column(*loaded, 1), (std::vector<float>{0, 0, 5, 5, 5}));
-        EXPECT_EQ(sorted_column(*loaded, 2), (std::vector<float>{0, 0, 0, 3, 3}));
+        ASSERT_EQ(loaded->size(), 6u);
+        EXPECT_EQ(sorted_column(*loaded, 0), (std::vector<float>{0, 1, 2, 10, 20, 21}));
+        EXPECT_EQ(sorted_column(*loaded, 1), (std::vector<float>{0, 0, 0, 5, 5, 5}));
+        EXPECT_EQ(sorted_column(*loaded, 2), (std::vector<float>{0, 0, 0, 0, 0, 3}));
+
+        fs::remove(temp_dir / "live.rad");
+        const auto missing_output = temp_dir / "missing-rad.ply";
+        EXPECT_NE(lfs::app::run_converter(make_convert_params(project, missing_output)), 0);
+        EXPECT_FALSE(fs::exists(missing_output));
+    }
+
+    TEST_F(ConverterLichtTest, AppliesCropShapesInLocalSpaceAndHonorsTheirState) {
+        for (const auto shape : {"cropbox", "ellipsoid", "crop_polygon"}) {
+            for (const bool inverse : {false, true}) {
+                SCOPED_TRACE(std::string(shape) + (inverse ? " inverse" : " inside"));
+                const auto project = temp_dir / (std::string(shape) + (inverse ? "-inverse.licht" : "-inside.licht"));
+                const auto source = test_uuid(600);
+                auto document = make_empty_document(test_uuid(601), 100);
+                const auto root = test_uuid(605);
+                add_root_group(*document, root);
+                add_embedded_splat(*document, source, root, 0,
+                                   *make_shaped_splat(6, 1), "Source", 2,
+                                   translation(30, 4, 7));
+                SceneNodeRecord crop{
+                    .uuid = test_uuid(602),
+                    .type = shape,
+                    .name = "Crop",
+                    .parent_uuid = source,
+                    .local_transform = {0, 2, 0, 0, -1.1f, 0, 0, 0, 0, 0, 1, 0, 2, 0, 0, 1},
+                    .visible = false,
+                };
+                if (crop.type == "cropbox")
+                    crop.cropbox = CropBoxRecord{.min = {-1.1f, -1, -1}, .max = {1.1f, 1, 1}, .inverse = inverse, .enabled = true};
+                else if (crop.type == "ellipsoid")
+                    crop.ellipsoid = EllipsoidRecord{.radii = {1.1f, 1, 1}, .inverse = inverse, .enabled = true};
+                else
+                    crop.crop_polygon = CropPolygonRecord{.vertices = {{-1.1f, -1}, {1.1f, -1}, {1.1f, 1}, {-1.1f, 1}}, .half_depth = 1, .inverse = inverse};
+                require_status(document->edit_scene_graph().upsert_node(crop));
+                const auto saved = document->save(project, save_options(603, 200));
+                ASSERT_TRUE(saved) << lfs::format_for_developer(saved.error());
+                document.reset();
+                const auto result = load_project_splats(project);
+                ASSERT_TRUE(result) << lfs::format_for_developer(result.error());
+                EXPECT_EQ(result->splats->get_max_sh_degree(), 1);
+                EXPECT_EQ(sorted_column(*result->splats, 0),
+                          inverse ? (std::vector<float>{30, 34, 35}) : (std::vector<float>{31, 32, 33}));
+
+                auto disabled = ProjectDocument::open(project);
+                ASSERT_TRUE(disabled);
+                auto owner = disabled->edit_scene_graph().find(source);
+                ASSERT_TRUE(owner && *owner);
+                (**owner).crop_effects_enabled = false;
+                require_status(disabled->edit_scene_graph().upsert_node(**owner));
+                ASSERT_TRUE(disabled->save(project, save_options(604, 300)));
+                const auto whole = load_project_splats(project);
+                ASSERT_TRUE(whole) << lfs::format_for_developer(whole.error());
+                EXPECT_EQ(whole->splats->size(), 6u);
+            }
+        }
+    }
+
+    TEST_F(ConverterLichtTest, ComposesCropMasksWithoutAffectingOtherSources) {
+        const auto project = temp_dir / "combined-crops.licht";
+        auto document = make_empty_document(test_uuid(620), 100);
+        const auto root = test_uuid(621), source = test_uuid(622);
+        add_root_group(*document, root);
+        add_embedded_splat(*document, source, root, 0, *make_shaped_splat(6, 0), "Cropped", 1);
+        add_embedded_splat(*document, test_uuid(623), root, 1, *make_shaped_splat(2, 0), "Uncropped", 2, translation(20, 0, 0));
+        require_status(document->edit_scene_graph().upsert_node(SceneNodeRecord{
+            .uuid = test_uuid(624),
+            .type = "cropbox",
+            .name = "Keep range",
+            .parent_uuid = source,
+            .cropbox = CropBoxRecord{.min = {0.5f, -1, -1}, .max = {3.5f, 1, 1}, .enabled = true},
+        }));
+        require_status(document->edit_scene_graph().upsert_node(SceneNodeRecord{
+            .uuid = test_uuid(625),
+            .type = "ellipsoid",
+            .name = "Remove centre",
+            .parent_uuid = source,
+            .child_order = 1,
+            .local_transform = translation(2, 0, 0),
+            .ellipsoid = EllipsoidRecord{.radii = {0.5f, 1, 1}, .inverse = true, .enabled = true},
+        }));
+        require_status(document->edit_scene_graph().upsert_node(SceneNodeRecord{
+            .uuid = test_uuid(626),
+            .type = "cropbox",
+            .name = "Disabled",
+            .parent_uuid = source,
+            .child_order = 2,
+            .local_transform = translation(100, 0, 0),
+            .cropbox = CropBoxRecord{.enabled = false},
+        }));
+        const auto saved = document->save(project, save_options(627, 200));
+        ASSERT_TRUE(saved) << lfs::format_for_developer(saved.error());
+        auto result = load_project_splats(project);
+        ASSERT_TRUE(result) << lfs::format_for_developer(result.error());
+        EXPECT_EQ(sorted_column(*result->splats, 0), (std::vector<float>{1, 3, 20, 21}));
+
+        auto crop = document->edit_scene_graph().find(test_uuid(624));
+        ASSERT_TRUE(crop && *crop);
+        (**crop).local_transform = translation(100, 0, 0);
+        require_status(document->edit_scene_graph().upsert_node(**crop));
+        ASSERT_TRUE(document->save(project, save_options(628, 300)));
+        result = load_project_splats(project);
+        ASSERT_TRUE(result) << lfs::format_for_developer(result.error());
+        EXPECT_EQ(sorted_column(*result->splats, 0), (std::vector<float>{20, 21}));
+
+        (**crop).local_transform = translation(0, 0, 0);
+        (**crop).local_transform[0] = 0;
+        require_status(document->edit_scene_graph().upsert_node(**crop));
+        ASSERT_TRUE(document->save(project, save_options(629, 400)));
+        EXPECT_FALSE(load_project_splats(project));
+        const auto canceled = load_project_splats(project, false, [] { return true; });
+        ASSERT_FALSE(canceled);
+        EXPECT_EQ(canceled.error().code(), lfs::ErrorCode::Cancelled);
+    }
+
+    TEST_F(ConverterLichtTest, ConvertsRadHierarchyToFullDetailLeaves) {
+        auto model = make_shaped_splat(3, 0);
+        model->lod_tree = std::make_unique<SplatLodTree>();
+        model->lod_tree->child_count = {2, 0, 0};
+        model->lod_tree->child_start = {1, 0, 0};
+        model->lod_tree->lod_level = {1, 0, 0};
+        model->lod_tree->centers = {{0, 0, 0}, {1, 0, 0}, {2, 0, 0}};
+        model->lod_tree->sizes = {4, 1, 1};
+        const auto input = temp_dir / "tree.rad";
+        ASSERT_TRUE(save_rad(*model, {.output_path = input}));
+        const auto output = temp_dir / "leaves.ply";
+        ASSERT_EQ(lfs::app::run_converter(make_convert_params(input, output)), 0);
+        const auto loaded = load_output(output);
+        ASSERT_TRUE(loaded);
+        EXPECT_EQ(loaded->size(), 2u);
+        const auto x = sorted_column(*loaded, 0);
+        ASSERT_EQ(x.size(), 2u);
+        EXPECT_NEAR(x[0], 1.0f, 0.01f);
+        EXPECT_NEAR(x[1], 2.0f, 0.01f);
     }
 
     TEST_F(ConverterLichtTest, RemovesNoiseInfillFromEachSourceBeforeMerging) {

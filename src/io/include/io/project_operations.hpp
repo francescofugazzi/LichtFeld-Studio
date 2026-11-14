@@ -139,12 +139,6 @@ namespace lfs::io::project {
     struct LFS_IO_API ProjectSplatScene {
         std::shared_ptr<lfs::core::SplatData> splats;
         std::size_t node_count = 0;
-        // Crop volumes attached to the exported splats. They stay editable
-        // scene filters and are not applied to the materialized geometry.
-        std::size_t unapplied_crop_volumes = 0;
-        // Visible live RAD nodes reference an external streamed file and are
-        // not part of the merged splats.
-        std::size_t skipped_live_rad_nodes = 0;
     };
 
     struct LFS_IO_API ProjectRepairResult {
@@ -213,8 +207,9 @@ namespace lfs::io::project {
                            ProjectOperationCancel cancel = {});
 
     // Merge the visible splat nodes of a saved project in project world space:
-    // parent visibility and transforms, the SH degree of each published asset
-    // and removal of each source's noise infill. keep_lod_tree keeps the tree
+    // parent visibility and transforms, the SH degree of each published asset,
+    // applied enabled crops and removal of each source's noise infill.
+    // External RAD sources are fully loaded. keep_lod_tree keeps the tree
     // of a single untransformed LOD source for outputs that store one.
     [[nodiscard]] LFS_IO_API lfs::Result<ProjectSplatScene>
     load_project_splats(const std::filesystem::path& path,

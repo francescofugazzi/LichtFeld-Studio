@@ -276,17 +276,6 @@ namespace lfs::app {
             }
             if (scene->node_count > 1)
                 std::println("  Merged {} visible splat nodes", scene->node_count);
-            if (scene->unapplied_crop_volumes > 0) {
-                std::println(stderr,
-                             "  Warning: {} crop volume(s) on the exported splats are not applied; "
-                             "apply them to the geometry in LichtFeld Studio to include them",
-                             scene->unapplied_crop_volumes);
-            }
-            if (scene->skipped_live_rad_nodes > 0) {
-                std::println(stderr,
-                             "  Warning: {} visible live RAD node(s) stream from external files and are not exported",
-                             scene->skipped_live_rad_nodes);
-            }
             splat = std::move(scene->splats);
             return true;
         }
@@ -431,7 +420,7 @@ namespace lfs::app {
                 }
             } else {
                 const auto loader = lfs::io::Loader::create();
-                auto load_result = loader->load(input);
+                auto load_result = loader->load(input, {.full_detail = true});
                 if (!load_result) {
                     LOG_ERROR("Load failed: {}", load_result.error().format());
                     std::println(stderr, "  Error: {}", load_result.error().message);
@@ -446,6 +435,14 @@ namespace lfs::app {
                 }
 
                 splat = std::move(*splat_ptr);
+            }
+            if (params.format != param::OutputFormat::RAD && splat->lod_tree && splat->lod_tree->has_tree()) {
+                auto leaves = lfs::core::extract_lod_leaves(*splat);
+                if (!leaves) {
+                    std::println(stderr, "  Error: {}", leaves.error().user_message());
+                    return false;
+                }
+                splat = std::make_shared<SplatData>(std::move(*leaves));
             }
             if (auto without_noise = lfs::core::without_noise_infill(*splat))
                 splat = std::make_shared<SplatData>(std::move(*without_noise));

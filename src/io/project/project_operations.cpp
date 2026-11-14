@@ -11,6 +11,9 @@
 #include "core/splat_data_transform.hpp"
 #include "core/user_paths.hpp"
 #include "crc32c.hpp"
+#ifndef LFS_FORMAT_TEST_TARGET
+#include "geometry/bounding_box.hpp"
+#endif
 #include "io/atomic_output.hpp"
 #include "io/embedded_dataset.hpp"
 #include "io/exporter.hpp"
@@ -28,6 +31,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <concepts>
 #include <cstring>
 #include <format>
@@ -688,8 +692,6 @@ namespace lfs::io::project {
         struct ExportSceneData {
             std::vector<std::shared_ptr<lfs::core::SplatData>> owners;
             std::vector<std::pair<const lfs::core::SplatData*, glm::mat4>> splats;
-            std::size_t crop_volumes = 0;
-            std::size_t live_references = 0;
         };
 
         lfs::Result<std::shared_ptr<lfs::core::SplatData>> load_export_payload(
@@ -747,9 +749,10 @@ namespace lfs::io::project {
                 }
                 return result;
             }
-            if (binding.fourcc != "DSRC" ||
-                (binding.source_kind != "ply" && binding.source_kind != "sog" &&
-                 binding.source_kind != "ssog" && binding.source_kind != "spz")) {
+            const bool live_rad = binding.fourcc == "REFS" && binding.source_kind == "rad" && binding.reference_uuid;
+            if (!live_rad && (binding.fourcc != "DSRC" ||
+                              (binding.source_kind != "ply" && binding.source_kind != "sog" &&
+                               binding.source_kind != "ssog" && binding.source_kind != "spz"))) {
                 return fail<std::shared_ptr<lfs::core::SplatData>>(
                     lfs::ErrorCode::Unsupported, {},
                     "The visible splat payload cannot be exported.",
@@ -780,7 +783,13 @@ namespace lfs::io::project {
             auto loader = lfs::io::Loader::create();
             lfs::io::LoadOptions options;
             options.cancel_requested = cancel;
+            options.full_detail = true;
             auto loaded = loader->load(*source_path, options);
+            if (cancel && cancel()) {
+                return fail<std::shared_ptr<lfs::core::SplatData>>(
+                    lfs::ErrorCode::Cancelled, *source_path,
+                    "Project export was canceled.", "canceled while loading source", "export.cancel");
+            }
             if (!loaded) {
                 return fail<std::shared_ptr<lfs::core::SplatData>>(
                     lfs::ErrorCode::DataLoss, *source_path,
@@ -812,7 +821,11 @@ namespace lfs::io::project {
                 by_id.emplace(record.uuid, &record);
             }
             ExportSceneData result;
-            std::unordered_set<lfs::core::Uuid> exported;
+            std::unordered_multimap<lfs::core::Uuid, const SceneNodeRecord*> crops;
+            for (const auto& record : *records) {
+                if (record.parent_uuid && (record.cropbox || record.ellipsoid || record.crop_polygon))
+                    crops.emplace(*record.parent_uuid, &record);
+            }
             for (const auto& record : *records) {
                 if (record.type != "splat" || !record.visible || !record.payload) {
                     continue;
@@ -834,12 +847,6 @@ namespace lfs::io::project {
                     parent = found->second->parent_uuid;
                 }
                 if (!visible) {
-                    continue;
-                }
-                // Live RAD nodes stream an external file and own no resident
-                // splats; they are counted so callers can report the omission.
-                if (record.payload->reference_uuid && record.payload->fourcc != "DSRC") {
-                    ++result.live_references;
                     continue;
                 }
                 auto data = load_export_payload(
@@ -874,23 +881,66 @@ namespace lfs::io::project {
                     }
                     *data = std::make_shared<lfs::core::SplatData>(std::move(*kept));
                 }
+                if (record.crop_effects_enabled) {
+                    const auto [begin, end] = crops.equal_range(record.uuid);
+                    for (auto crop = begin; crop != end; ++crop) {
+                        const auto& volume = *crop->second;
+                        const bool enabled = volume.cropbox     ? volume.cropbox->enabled
+                                             : volume.ellipsoid ? volume.ellipsoid->enabled
+                                                                : volume.crop_polygon->enabled;
+                        if (!enabled)
+                            continue;
+                        const auto model_determinant = glm::determinant(world);
+                        if (!std::isfinite(model_determinant) || model_determinant == 0.0f)
+                            return fail<ExportSceneData>(lfs::ErrorCode::InvalidArgument, path,
+                                                         "A cropped splat has an invalid transform.", record.name, "export.crop");
+                        if (cancel && cancel()) {
+                            return fail<ExportSceneData>(lfs::ErrorCode::Cancelled, path,
+                                                         "Project export was canceled.", "canceled before crop", "export.cancel");
+                        }
+                        // A crop is a direct child of its splat. The owner's
+                        // complete world transform cancels in world-to-crop * model-to-world.
+                        const auto local = glm::make_mat4(volume.local_transform.data());
+                        const auto determinant = glm::determinant(local);
+                        if (!std::isfinite(determinant) || determinant == 0.0f) {
+                            return fail<ExportSceneData>(lfs::ErrorCode::InvalidArgument, path,
+                                                         "A crop has a singular transform.", volume.name, "export.crop");
+                        }
+                        const auto to_crop = glm::inverse(local);
+                        for (int col = 0; col < 4; ++col)
+                            for (int row = 0; row < 4; ++row)
+                                if (!std::isfinite(to_crop[col][row]))
+                                    return fail<ExportSceneData>(lfs::ErrorCode::InvalidArgument, path,
+                                                                 "A crop has an invalid transform.", volume.name, "export.crop");
+                        if (volume.cropbox) {
+                            const auto& box = *volume.cropbox;
+                            lfs::geometry::BoundingBox bounds;
+                            bounds.setBounds(glm::make_vec3(box.min.data()), glm::make_vec3(box.max.data()));
+                            bounds.setworld2BBox(to_crop);
+                            (void)lfs::core::soft_crop_by_cropbox(**data, bounds, box.inverse);
+                        } else if (volume.ellipsoid) {
+                            const auto& ellipsoid = *volume.ellipsoid;
+                            (void)lfs::core::soft_crop_by_ellipsoid(**data, to_crop,
+                                                                    glm::make_vec3(ellipsoid.radii.data()), ellipsoid.inverse);
+                        } else {
+                            lfs::core::CropPolygonData polygon;
+                            polygon.half_depth = volume.crop_polygon->half_depth;
+                            polygon.inverse = volume.crop_polygon->inverse;
+                            for (const auto& vertex : volume.crop_polygon->vertices)
+                                polygon.vertices.emplace_back(vertex[0], vertex[1]);
+                            (void)lfs::core::soft_crop_by_polygon(**data, to_crop, polygon);
+                        }
+                    }
+                }
+                if ((*data)->visible_count() == 0)
+                    continue;
                 result.owners.push_back(*data);
                 result.splats.emplace_back(result.owners.back().get(), world);
-                exported.insert(record.uuid);
-            }
-            for (const auto& record : *records) {
-                if ((record.type == "cropbox" || record.type == "ellipsoid" ||
-                     record.type == "crop_polygon") &&
-                    record.parent_uuid && exported.contains(*record.parent_uuid)) {
-                    ++result.crop_volumes;
-                }
             }
             if (result.splats.empty()) {
                 return fail<ExportSceneData>(
                     lfs::ErrorCode::NotFound, path,
-                    result.live_references > 0
-                        ? "The project's visible splats are live RAD nodes, which cannot be exported."
-                        : "The project has no visible splats to export.",
+                    "The project has no visible splats to export after cropping.",
                     "SCNG contains no visible splat payload", "export.scene_graph");
             }
             return result;
@@ -2727,6 +2777,10 @@ namespace lfs::io::project {
                                  : lfs::core::Scene::MergeStorageMode::Clone;
         std::shared_ptr<lfs::core::SplatData> merged =
             lfs::core::Scene::mergeSplatsWithTransforms(scene->splats, storage);
+        if (cancel && cancel()) {
+            return fail<ProjectSplatScene>(lfs::ErrorCode::Cancelled, path,
+                                           "Project export was canceled.", "canceled while merging sources", "export.cancel");
+        }
         if (!merged || merged->size() == 0) {
             return fail<ProjectSplatScene>(
                 lfs::ErrorCode::DataLoss, path,
@@ -2736,8 +2790,6 @@ namespace lfs::io::project {
         return ProjectSplatScene{
             .splats = std::move(merged),
             .node_count = scene->splats.size(),
-            .unapplied_crop_volumes = scene->crop_volumes,
-            .skipped_live_rad_nodes = scene->live_references,
         };
     }
 

@@ -2312,8 +2312,8 @@ namespace {
         "  LichtFeld-Studio convert project.licht output.ply\n"
         "\n"
         "SUPPORTED FORMATS:\n"
-        "  Input:  .ply, .sog, .ssog, lod-meta.json, .spz, .glb (SPZ glTF), .usd, .usda, .usdc, .usdz, .resume (checkpoint),\n"
-        "          .licht (visible splat nodes of a project with their transforms; crop volumes are not applied)\n"
+        "  Input:  .ply, .sog, .ssog, lod-meta.json, .spz, .glb (SPZ glTF), .usd, .usda, .usdc, .usdz, .rad, .resume (checkpoint),\n"
+        "          .licht (visible splat nodes of a project with their transforms and enabled crops)\n"
         "  Output: .ply, .sog, .ssog, .spz, .glb, .usd, .usda, .usdc, .html, .rad\n"
         "  SPZ:    --spz-version 4 (default, zstd) or 3 (legacy gzip)\n"
         "  Metadata: --no-provenance strips identifying metadata; a minimal build stamp is always embedded\n"
@@ -2322,7 +2322,7 @@ namespace {
 
     // Identifiers for scripts and plugins. Never reword one; add a new identifier
     // when the behavior it names changes.
-    constexpr const char* CONVERT_CAPABILITIES = "visible-project-splats-v1\n";
+    constexpr const char* CONVERT_CAPABILITIES = "visible-project-splats-v1\nproject-crops-rad-v1\n";
 
     constexpr const char* MESH2SPLAT_HELP_HEADER = "LichtFeld Studio - Convert mesh files to Gaussian splats\n";
     constexpr const char* MESH2SPLAT_HELP_FOOTER =
